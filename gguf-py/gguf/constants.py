@@ -174,6 +174,12 @@ class Keys:
         TYPE       = "adapter.type"
         LORA_ALPHA = "adapter.lora.alpha"
 
+    class IMatrix:
+        CHUNK_COUNT = "imatrix.chunk_count"
+        CHUNK_SIZE  = "imatrix.chunk_size"
+        DATASET     = "imatrix.dataset"
+
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
@@ -182,6 +188,7 @@ class Keys:
 class GGUFType:
     MODEL   = "model"
     ADAPTER = "adapter"
+    IMATRIX = "imatrix"
 
 
 class MODEL_ARCH(IntEnum):
