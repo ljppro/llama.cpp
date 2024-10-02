@@ -2296,6 +2296,8 @@ static ggml_backend_buffer_type_t llama_default_buffer_type_cpu(bool host_buffer
     GGML_UNUSED(host_buffer);
 }
 
+namespace {
+
 //
 // globals
 //
@@ -2316,7 +2318,7 @@ struct llama_state {
     void * log_callback_user_data = nullptr;
 };
 
-static llama_state g_state;
+llama_state g_state;
 
 // available llama models
 enum e_model {
@@ -2382,9 +2384,9 @@ enum e_model {
     MODEL_27B,
 };
 
-static const size_t kiB = 1024;
-static const size_t MiB = 1024*kiB;
-static const size_t GiB = 1024*MiB;
+const size_t kiB = 1024;
+const size_t MiB = 1024*kiB;
+const size_t GiB = 1024*MiB;
 
 struct llama_hparams {
     bool vocab_only;
@@ -2888,6 +2890,8 @@ struct llama_control_vector {
         }
     }
 };
+
+}
 
 struct llama_model {
     e_model     type  = MODEL_UNKNOWN;
