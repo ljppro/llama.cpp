@@ -104,6 +104,7 @@ struct server_task {
     json data;
 
     server_task_cmpl_type cmpl_type = SERVER_TASK_CMPL_TYPE_NORMAL;
+    std::function<bool()> is_alive;
 
     // utility function
     static std::unordered_set<int> get_list_id(const std::vector<server_task> & tasks) {
@@ -173,7 +174,7 @@ struct server_slot {
     std::vector<completion_token_output> generated_token_probs;
 
     server_task_cmpl_type cmpl_type = SERVER_TASK_CMPL_TYPE_NORMAL;
-
+    std::function<bool()> is_alive;
     bool has_next_token = true;
     bool truncated      = false;
     bool stopped_eos    = false;
@@ -876,6 +877,7 @@ struct server_context {
         // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
         auto default_sparams = params.sparams;
         const auto & data = task.data;
+        slot.is_alive = task.is_alive;
 
         if (data.count("__oaicompat") != 0) {
             slot.oaicompat = true;
@@ -1117,6 +1119,13 @@ struct server_context {
     }
 
     bool process_token(completion_token_output & result, server_slot & slot) {
+        if (slot.is_alive && !slot.is_alive()) {
+            slot.truncated = false;
+            slot.has_next_token = false;
+
+            SLT_DBG(slot, "stopped by client disconnection, n_decoded = %d, n_predict = %d\n", slot.n_decoded, slot.params.n_predict);
+            return slot.has_next_token;
+        }
         // remember which tokens were sampled - used for repetition penalties during sampling
         const std::string token_str = llama_token_to_piece(ctx, result.tok, params.special);
         slot.sampled = result.tok;
@@ -1461,13 +1470,14 @@ struct server_context {
     // Functions to create new task(s) and receive result(s)
     //
 
-    std::vector<server_task> create_tasks_cmpl(json data, server_task_cmpl_type cmpl_type) {
+    std::vector<server_task> create_tasks_cmpl(json data, server_task_cmpl_type cmpl_type, const std::function<bool()> & is_alive) {
         std::vector<server_task> tasks;
         auto create_task = [&](json & task_data, bool replace_prompt, json prompt) {
             server_task task;
             task.id        = queue_tasks.get_new_id();
             task.cmpl_type = cmpl_type;
             task.type      = SERVER_TASK_TYPE_COMPLETION;
+            task.is_alive  = is_alive;
             if (replace_prompt) {
                 task.data  = task_data;
                 task.data["prompt"] = std::move(prompt);
@@ -1864,6 +1874,13 @@ struct server_context {
     void update_slots() {
         if (system_need_update) {
             system_prompt_update();
+        }
+
+        for (auto & slot : slots) {
+            if (slot.is_processing() && slot.is_alive && !slot.is_alive()) {
+                SLT_WRN(slot, "%s", "slot connection died\n");
+                slot.release();
+            }
         }
 
         // check if all slots are idle
@@ -2337,6 +2354,10 @@ struct server_context {
                 }
 
                 completion_token_output result;
+                if (params.testing_sampler_delay_millis > 0) {
+                    SRV_DBG("sleeping for %dms before sampling (for tests!)\n", params.testing_sampler_delay_millis);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(params.testing_sampler_delay_millis));
+                }
                 const llama_token id = gpt_sampler_sample(slot.smpl, ctx, slot.i_batch - i);
 
                 gpt_sampler_accept(slot.smpl, id, true);
@@ -2893,7 +2914,7 @@ int main(int argc, char ** argv) {
             return;
         }
 
-        std::vector<server_task> tasks = ctx_server.create_tasks_cmpl(data, cmpl_type);
+        std::vector<server_task> tasks = ctx_server.create_tasks_cmpl(data, cmpl_type, res.is_alive);
         ctx_server.queue_results.add_waiting_tasks(tasks);
         ctx_server.queue_tasks.post(tasks);
 
@@ -2956,7 +2977,7 @@ int main(int argc, char ** argv) {
 
         json data = oaicompat_completion_params_parse(ctx_server.model, json::parse(req.body), params.chat_template);
 
-        std::vector<server_task> tasks = ctx_server.create_tasks_cmpl(data, SERVER_TASK_CMPL_TYPE_NORMAL);
+        std::vector<server_task> tasks = ctx_server.create_tasks_cmpl(data, SERVER_TASK_CMPL_TYPE_NORMAL, res.is_alive);
         ctx_server.queue_results.add_waiting_tasks(tasks);
         ctx_server.queue_tasks.post(tasks);
 
@@ -3099,7 +3120,7 @@ int main(int argc, char ** argv) {
         json responses = json::array();
         bool error = false;
         {
-            std::vector<server_task> tasks = ctx_server.create_tasks_cmpl({{"prompt", prompt}}, SERVER_TASK_CMPL_TYPE_EMBEDDING);
+            std::vector<server_task> tasks = ctx_server.create_tasks_cmpl({{"prompt", prompt}}, SERVER_TASK_CMPL_TYPE_EMBEDDING, res.is_alive);
             ctx_server.queue_results.add_waiting_tasks(tasks);
             ctx_server.queue_tasks.post(tasks);
 
@@ -3176,7 +3197,7 @@ int main(int argc, char ** argv) {
         json responses = json::array();
         bool error = false;
         {
-            std::vector<server_task> tasks = ctx_server.create_tasks_cmpl({{"prompt", prompt}}, SERVER_TASK_CMPL_TYPE_RERANK);
+            std::vector<server_task> tasks = ctx_server.create_tasks_cmpl({{"prompt", prompt}}, SERVER_TASK_CMPL_TYPE_RERANK, res.is_alive);
             ctx_server.queue_results.add_waiting_tasks(tasks);
             ctx_server.queue_tasks.post(tasks);
 
