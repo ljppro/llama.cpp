@@ -3072,17 +3072,17 @@ struct llama_sbatch {
                 ubatch.output[ubatch.n_tokens + i] = 1;
                 out_ids.push_back(ids[seq.offset + i]);
             }
-        } else if (batch->logits) {
+        } else if (batch->output) {
             if (ubatch.equal_seqs) {
                 for (size_t i = 0; i < length; ++i) {
                     size_t id = ids[seq.offset + i];
-                    int8_t is_output = batch->logits[id];
+                    int8_t is_output = batch->output[id];
                     ubatch.output[ubatch.n_tokens + i] = is_output;
                     if (is_output) { out_ids.push_back(id); }
                 }
             } else {
                 // simple split
-                ubatch.output = batch->logits + seq.offset;
+                ubatch.output = batch->output + seq.offset;
                 for (size_t i = 0; i < length; ++i) {
                     if (ubatch.output[i] != 0) { out_ids.push_back(seq.offset + i); }
                 }
@@ -5184,7 +5184,7 @@ struct llama_batch_allocr {
     std::vector<llama_pos>      pos;
     std::vector<int32_t>        n_seq_id;
     std::vector<llama_seq_id *> seq_id;
-    std::vector<int8_t>         logits;
+    std::vector<int8_t>         outputs;
     struct llama_batch          batch;
     // optionally fulfill the batch returned by llama_batch_get_one
     llama_batch_allocr(llama_context & ctx, struct llama_batch in_batch) {
@@ -5220,10 +5220,10 @@ struct llama_batch_allocr {
             }
             batch.seq_id = seq_id.data();
         }
-        if (!batch.logits) {
-            logits.resize(batch.n_tokens);
-            logits[logits.size() - 1] = true;
-            batch.logits = logits.data();
+        if (!batch.output) {
+            outputs.resize(batch.n_tokens);
+            outputs[outputs.size() - 1] = true;
+            batch.output = outputs.data();
         }
     }
 };
@@ -17200,9 +17200,9 @@ static int llama_decode_internal(
     lctx.embd_seq.clear();
 
     // count outputs
-    if (batch.logits && !embd_pooled) {
+    if (batch.output && !embd_pooled) {
         for (uint32_t i = 0; i < n_tokens_all; ++i) {
-            n_outputs += batch.logits[i] != 0;
+            n_outputs += batch.output[i] != 0;
         }
     } else if (lctx.logits_all || embd_pooled) {
         n_outputs = n_tokens_all;
@@ -21129,7 +21129,7 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
     }
     batch.seq_id[n_tokens_alloc] = nullptr;
 
-    batch.logits   = (int8_t *)        malloc(sizeof(int8_t)         * n_tokens_alloc);
+    batch.output   = (int8_t *)        malloc(sizeof(int8_t)         * n_tokens_alloc);
 
     return batch;
 }
@@ -21145,7 +21145,7 @@ void llama_batch_free(struct llama_batch batch) {
         }
         free(batch.seq_id);
     }
-    if (batch.logits)   free(batch.logits);
+    if (batch.output)   free(batch.output);
 }
 
 int32_t llama_encode(

@@ -137,7 +137,7 @@ actor LlamaContext {
             let i = Int(i1)
             llama_batch_add(&batch, tokens_list[i], Int32(i), [0], false)
         }
-        batch.logits[Int(batch.n_tokens) - 1] = 1 // true
+        batch.output[Int(batch.n_tokens) - 1] = 1 // true
 
         if llama_decode(context, batch) != 0 {
             print("llama_decode() failed")
@@ -206,7 +206,7 @@ actor LlamaContext {
             for i in 0..<n_tokens {
                 llama_batch_add(&batch, 0, Int32(i), [0], false)
             }
-            batch.logits[Int(batch.n_tokens) - 1] = 1 // true
+            batch.output[Int(batch.n_tokens) - 1] = 1 // true
 
             llama_kv_cache_clear(context)
 

@@ -554,7 +554,7 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
             << ":pos " << std::to_string(batch.pos[i])
             << ":n_seq_id  " << std::to_string(batch.n_seq_id[i])
             << ":seq_id " << std::to_string(batch.seq_id[i][0])
-            << ":logits " << std::to_string(batch.logits[i]);
+            << ":output " << std::to_string(batch.output[i]);
     }
 
     buf << " ]";
@@ -1480,7 +1480,7 @@ void common_batch_add(
                         llama_token   id,
                           llama_pos   pos,
     const std::vector<llama_seq_id> & seq_ids,
-                               bool   logits) {
+                               bool   output) {
     GGML_ASSERT(batch.seq_id[batch.n_tokens] && "llama_batch size exceeded");
 
     batch.token   [batch.n_tokens] = id;
@@ -1489,7 +1489,7 @@ void common_batch_add(
     for (size_t i = 0; i < seq_ids.size(); ++i) {
         batch.seq_id[batch.n_tokens][i] = seq_ids[i];
     }
-    batch.logits  [batch.n_tokens] = logits;
+    batch.output  [batch.n_tokens] = output;
 
     batch.n_tokens++;
 }
