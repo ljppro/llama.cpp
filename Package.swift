@@ -15,6 +15,7 @@ var sources = [
     "ggml/src/ggml-backend.cpp",
     "ggml/src/ggml-quants.c",
     "ggml/src/ggml-aarch64.c",
+    "ggml/src/ggml-fp8.cpp",
 ]
 
 var resources: [Resource] = []
