@@ -2347,7 +2347,7 @@ void llama_perf_sampler_reset(struct llama_sampler * chain) {
 #include "llguidance.h"
 
 struct llama_sampler_llg {
-    const struct llama_vocab * vocab;
+    const struct llama_model * model;
     std::string grammar_kind;
     std::string grammar_data;
     LlgConstraint *grammar;
@@ -2364,6 +2364,7 @@ static LlgConstraint *llama_sampler_llg_new(const char * grammar_kind, const cha
         llg_free_constraint(c);
         return nullptr;
     }
+    return c;
 }
 
 static const char * llama_sampler_llg_name(const struct llama_sampler * /*smpl*/) {
@@ -2394,7 +2395,7 @@ static void llama_sampler_llg_apply(struct llama_sampler * smpl, llama_token_dat
         if (ctx->has_llg_res) {
             if (ctx->llg_res.is_stop) {
                 for (size_t i = 0; i < cur_p->size; ++i) {
-                    if (!llama_token_is_eog_impl(*ctx->vocab, cur_p->data[i].id)) {
+                    if (!llama_token_is_eog(ctx->model, cur_p->data[i].id)) {
                         cur_p->data[i].logit = -INFINITY;
                     }
                 }
@@ -2426,7 +2427,7 @@ static void llama_sampler_llg_reset(struct llama_sampler * smpl) {
 static struct llama_sampler * llama_sampler_llg_clone(const struct llama_sampler * smpl) {
     const auto * ctx = (const llama_sampler_llg *) smpl->ctx;
 
-    auto * result = llama_sampler_init_llg_impl(*ctx->vocab, nullptr, nullptr);
+    auto * result = llama_sampler_init_llg(ctx->model, nullptr, nullptr);
 
     // copy the state
     {
@@ -2461,15 +2462,13 @@ static struct llama_sampler_i llama_sampler_llg_i = {
     /* .free   = */ llama_sampler_llg_free,
 };
 
-struct llama_sampler * llama_sampler_init_llg_impl(const struct llama_vocab & vocab, const char * grammar_kind, const char * grammar_data) {
+struct llama_sampler * llama_sampler_init_llg(const struct llama_model * model, 
+        const char * grammar_kind, const char * grammar_data) {
     auto * ctx = new llama_sampler_llg;
 
     if (grammar_kind != nullptr && grammar_kind[0] != '\0') {
-        auto d = vocab.id_to_token[94776].text;
-        LLAMA_LOG_INFO("llg: %s %d\n", d.c_str(), d.size());
-
         *ctx = {
-            /* .vocab        = */ &vocab,
+            /* .model        = */ model,
             /* .grammar_kind = */ grammar_kind,
             /* .grammar_data = */ grammar_data,
             /* .grammar      = */ llama_sampler_llg_new(grammar_kind, grammar_data),
@@ -2478,7 +2477,7 @@ struct llama_sampler * llama_sampler_init_llg_impl(const struct llama_vocab & vo
         };
     } else {
         *ctx = {
-            /* .vocab        = */ &vocab,
+            /* .model        = */ model,
             /* .grammar_kind = */ {},
             /* .grammar_data = */ {},
             /* .grammar      = */ nullptr,
