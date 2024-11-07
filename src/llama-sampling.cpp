@@ -2358,7 +2358,12 @@ struct llama_sampler_llg {
 static LlgConstraint *llama_sampler_llg_new(const char * grammar_kind, const char * grammar_data) {
     LlgConstraintInit cinit;
     llg_constraint_init_set_defaults(&cinit, nullptr);
-    return llg_new_constraint_any(&cinit, grammar_kind, grammar_data);
+    auto c = llg_new_constraint_any(&cinit, grammar_kind, grammar_data);
+    if (llg_get_error(c)) {
+        LLAMA_LOG_ERROR("llg error: %s\n", llg_get_error(c));
+        llg_free_constraint(c);
+        return nullptr;
+    }
 }
 
 static const char * llama_sampler_llg_name(const struct llama_sampler * /*smpl*/) {
@@ -2382,6 +2387,8 @@ static void llama_sampler_llg_apply(struct llama_sampler * smpl, llama_token_dat
                 ctx->has_llg_res = true;
             } else {
                 LLAMA_LOG_ERROR("llg error: %s\n", llg_get_error(ctx->grammar));
+                llg_free_constraint(ctx->grammar);
+                ctx->grammar = nullptr;
             }
         }
         if (ctx->has_llg_res) {
@@ -2458,6 +2465,9 @@ struct llama_sampler * llama_sampler_init_llg_impl(const struct llama_vocab & vo
     auto * ctx = new llama_sampler_llg;
 
     if (grammar_kind != nullptr && grammar_kind[0] != '\0') {
+        auto d = vocab.id_to_token[94776].text;
+        LLAMA_LOG_INFO("llg: %s %d\n", d.c_str(), d.size());
+
         *ctx = {
             /* .vocab        = */ &vocab,
             /* .grammar_kind = */ grammar_kind,
