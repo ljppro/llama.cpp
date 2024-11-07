@@ -2342,3 +2342,145 @@ void llama_perf_sampler_reset(struct llama_sampler * chain) {
 
     ctx->t_sample_us = ctx->n_sample = 0;
 }
+
+#ifdef GGML_LLGUIDANCE
+#include "llguidance.h"
+
+struct llama_sampler_llg {
+    const struct llama_vocab * vocab;
+    std::string grammar_kind;
+    std::string grammar_data;
+    LlgConstraint *grammar;
+    LlgMaskResult llg_res;
+    bool has_llg_res;
+};
+
+static LlgConstraint *llama_sampler_llg_new(const char * grammar_kind, const char * grammar_data) {
+    LlgConstraintInit cinit;
+    llg_constraint_init_set_defaults(&cinit, nullptr);
+    return llg_new_constraint_any(&cinit, grammar_kind, grammar_data);
+}
+
+static const char * llama_sampler_llg_name(const struct llama_sampler * /*smpl*/) {
+    return "llguidance";
+}
+
+static void llama_sampler_llg_accept_impl(struct llama_sampler * smpl, llama_token token) {
+    auto * ctx = (llama_sampler_llg *) smpl->ctx;
+    if (ctx->grammar) {
+        LlgCommitResult res;
+        llg_commit_token(ctx->grammar, token, &res);
+        ctx->has_llg_res = false;
+    }
+}
+
+static void llama_sampler_llg_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_llg *) smpl->ctx;
+    if (ctx->grammar) {
+        if (!ctx->has_llg_res) {
+            if (llg_compute_mask(ctx->grammar, &ctx->llg_res) == 0) {
+                ctx->has_llg_res = true;
+            } else {
+                LLAMA_LOG_ERROR("llg error: %s\n", llg_get_error(ctx->grammar));
+            }
+        }
+        if (ctx->has_llg_res) {
+            if (ctx->llg_res.is_stop) {
+                for (size_t i = 0; i < cur_p->size; ++i) {
+                    if (!llama_token_is_eog_impl(*ctx->vocab, cur_p->data[i].id)) {
+                        cur_p->data[i].logit = -INFINITY;
+                    }
+                }
+            } else {
+                const uint32_t *mask = ctx->llg_res.sample_mask;
+                for (size_t i = 0; i < cur_p->size; ++i) {
+                    auto token = cur_p->data[i].id;
+                    if ((mask[token / 32] & (1 << (token % 32))) == 0) {
+                        cur_p->data[i].logit = -INFINITY;
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void llama_sampler_llg_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_llg *) smpl->ctx;
+    if (!ctx->grammar) {
+        return;
+    }
+
+    auto * grammar_new = llama_sampler_llg_new(ctx->grammar_kind.c_str(), ctx->grammar_data.c_str());
+    llg_free_constraint(ctx->grammar);
+    ctx->grammar = grammar_new;
+    ctx->has_llg_res = false;
+}
+
+static struct llama_sampler * llama_sampler_llg_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_llg *) smpl->ctx;
+
+    auto * result = llama_sampler_init_llg_impl(*ctx->vocab, nullptr, nullptr);
+
+    // copy the state
+    {
+        auto * result_ctx = (llama_sampler_llg *) result->ctx;
+
+        if (ctx->grammar) {
+            result_ctx->grammar_kind = ctx->grammar_kind;
+            result_ctx->grammar_data = ctx->grammar_data;
+            result_ctx->grammar = llg_clone_constraint(ctx->grammar);
+        }
+    }
+
+    return result;
+}
+
+static void llama_sampler_llg_free(struct llama_sampler * smpl) {
+    const auto * ctx = (llama_sampler_llg *) smpl->ctx;
+
+    if (ctx->grammar) {
+        llg_free_constraint(ctx->grammar);
+    }
+
+    delete ctx;
+}
+
+static struct llama_sampler_i llama_sampler_llg_i = {
+    /* .name   = */ llama_sampler_llg_name,
+    /* .accept = */ llama_sampler_llg_accept_impl,
+    /* .apply  = */ llama_sampler_llg_apply,
+    /* .reset  = */ llama_sampler_llg_reset,
+    /* .clone  = */ llama_sampler_llg_clone,
+    /* .free   = */ llama_sampler_llg_free,
+};
+
+struct llama_sampler * llama_sampler_init_llg_impl(const struct llama_vocab & vocab, const char * grammar_kind, const char * grammar_data) {
+    auto * ctx = new llama_sampler_llg;
+
+    if (grammar_kind != nullptr && grammar_kind[0] != '\0') {
+        *ctx = {
+            /* .vocab        = */ &vocab,
+            /* .grammar_kind = */ grammar_kind,
+            /* .grammar_data = */ grammar_data,
+            /* .grammar      = */ llama_sampler_llg_new(grammar_kind, grammar_data),
+            /* .llg_res      = */ {},
+            /* .has_llg_res  = */ false,
+        };
+    } else {
+        *ctx = {
+            /* .vocab        = */ &vocab,
+            /* .grammar_kind = */ {},
+            /* .grammar_data = */ {},
+            /* .grammar      = */ nullptr,
+            /* .llg_res      = */ {},
+            /* .has_llg_res  = */ false,
+        };
+    }
+
+    return new llama_sampler {
+        /* .iface = */ &llama_sampler_llg_i,
+        /* .ctx   = */ ctx,
+    };
+}
+
+#endif

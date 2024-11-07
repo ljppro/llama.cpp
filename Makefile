@@ -73,6 +73,8 @@ LEGACY_TARGETS_CLEAN = main quantize quantize-stats perplexity imatrix embedding
 #  We don't want to clutter things too much, so we only build replacements for the most commonly used binaries.
 LEGACY_TARGETS_BUILD = main quantize perplexity embedding server
 
+GGML_LLGUIDANCE := 1
+
 # Deprecation aliases
 ifdef LLAMA_CUBLAS
 $(error LLAMA_CUBLAS is removed. Use GGML_CUDA instead.)
@@ -357,6 +359,11 @@ endif
 ifdef LLAMA_SERVER_SSL
 	MK_CPPFLAGS += -DCPPHTTPLIB_OPENSSL_SUPPORT
 	MK_LDFLAGS += -lssl -lcrypto
+endif
+
+ifdef GGML_LLGUIDANCE
+	MK_CPPFLAGS  += -DGGML_LLGUIDANCE -I$(CURDIR)/../guidance-ws/llguidance/parser
+	MK_LDFLAGS   += -L$(CURDIR)/../guidance-ws/target/release -lllguidance_parser
 endif
 
 # warnings
