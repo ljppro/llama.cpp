@@ -73,8 +73,6 @@ LEGACY_TARGETS_CLEAN = main quantize quantize-stats perplexity imatrix embedding
 #  We don't want to clutter things too much, so we only build replacements for the most commonly used binaries.
 LEGACY_TARGETS_BUILD = main quantize perplexity embedding server
 
-GGML_LLGUIDANCE := 1
-
 # Deprecation aliases
 ifdef LLAMA_CUBLAS
 $(error LLAMA_CUBLAS is removed. Use GGML_CUDA instead.)
@@ -361,9 +359,14 @@ ifdef LLAMA_SERVER_SSL
 	MK_LDFLAGS += -lssl -lcrypto
 endif
 
-ifdef GGML_LLGUIDANCE
-	MK_CPPFLAGS  += -DGGML_LLGUIDANCE -I$(CURDIR)/../guidance-ws/llguidance/parser
-	MK_LDFLAGS   += -L$(CURDIR)/../guidance-ws/target/release -lllguidance_parser
+# git clone https://github.com/microsoft/llguidance 
+# cd llguidance/parser
+# cargo build --release
+# cd ../../llama.cpp
+# make LLGUIDANCE_PATH=../llguidance/parser/target/release -j llama-server
+ifdef LLGUIDANCE_PATH
+	MK_CPPFLAGS  += -DGGML_LLGUIDANCE -I$(LLGUIDANCE_PATH)
+	MK_LDFLAGS   += $(LLGUIDANCE_PATH)/libllguidance_parser.a
 endif
 
 # warnings
