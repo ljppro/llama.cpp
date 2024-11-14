@@ -6,6 +6,7 @@
 #include "ggml-backend.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-cpu.h"
+#include "ggml-fp8.h"
 #include "ggml-impl.h"
 #include "ggml-quants.h"
 #include "ggml.h"
@@ -424,6 +425,27 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_TQ2_0] = {
         .vec_dot                  = ggml_vec_dot_tq2_0_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    // les FP8...
+    [GGML_TYPE_E5M2] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_e5m2,
+        .vec_dot_type             = GGML_FP8_VECT_DOT_TYPE,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_E4M3] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_e4m3,
+        .vec_dot_type             = GGML_FP8_VECT_DOT_TYPE,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_E4M3_Q] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_e4m3_q,
+        .vec_dot_type             = GGML_FP8_VECT_DOT_TYPE,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_E3M4_Q] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_e3m4_q,
+        .vec_dot_type             = GGML_FP8_VECT_DOT_TYPE,
         .nrows                    = 1,
     },
 };
@@ -4499,6 +4521,10 @@ static void ggml_compute_forward_add(
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
+        case GGML_TYPE_E5M2  :
+        case GGML_TYPE_E4M3  :
+        case GGML_TYPE_E4M3_Q:
+        case GGML_TYPE_E3M4_Q:
             {
                 ggml_compute_forward_add_q_f32(params, dst);
             } break;
@@ -4879,6 +4905,10 @@ static void ggml_compute_forward_add1(
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
+        case GGML_TYPE_E5M2  :
+        case GGML_TYPE_E4M3  :
+        case GGML_TYPE_E4M3_Q:
+        case GGML_TYPE_E3M4_Q:
             {
                 ggml_compute_forward_add1_q_f32(params, dst);
             } break;
@@ -4982,33 +5012,6 @@ static void ggml_compute_forward_acc(
             {
                 ggml_compute_forward_acc_f32(params, dst);
             } break;
-        case GGML_TYPE_F16:
-        case GGML_TYPE_BF16:
-        case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q4_1:
-        case GGML_TYPE_Q5_0:
-        case GGML_TYPE_Q5_1:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_Q8_1:
-        case GGML_TYPE_Q2_K:
-        case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q4_K:
-        case GGML_TYPE_Q5_K:
-        case GGML_TYPE_Q6_K:
-        case GGML_TYPE_TQ1_0:
-        case GGML_TYPE_TQ2_0:
-        case GGML_TYPE_IQ2_XXS:
-        case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ3_XXS:
-        case GGML_TYPE_IQ1_S:
-        case GGML_TYPE_IQ1_M:
-        case GGML_TYPE_IQ4_NL:
-        case GGML_TYPE_IQ4_XS:
-        case GGML_TYPE_IQ3_S:
-        case GGML_TYPE_IQ2_S:
-        case GGML_TYPE_Q4_0_4_4:
-        case GGML_TYPE_Q4_0_4_8:
-        case GGML_TYPE_Q4_0_8_8:
         default:
             {
                 GGML_ABORT("fatal error");
@@ -8238,33 +8241,6 @@ static void ggml_compute_forward_set(
             {
                 ggml_compute_forward_set_f32(params, dst);
             } break;
-        case GGML_TYPE_F16:
-        case GGML_TYPE_BF16:
-        case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q4_1:
-        case GGML_TYPE_Q5_0:
-        case GGML_TYPE_Q5_1:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_Q8_1:
-        case GGML_TYPE_Q2_K:
-        case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q4_K:
-        case GGML_TYPE_Q5_K:
-        case GGML_TYPE_Q6_K:
-        case GGML_TYPE_TQ1_0:
-        case GGML_TYPE_TQ2_0:
-        case GGML_TYPE_IQ2_XXS:
-        case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ3_XXS:
-        case GGML_TYPE_IQ1_S:
-        case GGML_TYPE_IQ1_M:
-        case GGML_TYPE_IQ4_NL:
-        case GGML_TYPE_IQ4_XS:
-        case GGML_TYPE_IQ3_S:
-        case GGML_TYPE_IQ2_S:
-        case GGML_TYPE_Q4_0_4_4:
-        case GGML_TYPE_Q4_0_4_8:
-        case GGML_TYPE_Q4_0_8_8:
         default:
             {
                 GGML_ABORT("fatal error");
@@ -8529,6 +8505,10 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_Q4_0_4_4:
         case GGML_TYPE_Q4_0_4_8:
         case GGML_TYPE_Q4_0_8_8:
+        case GGML_TYPE_E5M2  :
+        case GGML_TYPE_E4M3  :
+        case GGML_TYPE_E4M3_Q:
+        case GGML_TYPE_E3M4_Q:
             {
                 ggml_compute_forward_get_rows_q(params, dst);
             } break;
@@ -9093,40 +9073,7 @@ static void ggml_compute_forward_clamp(
             {
                 ggml_compute_forward_clamp_f32(params, dst);
             } break;
-        case GGML_TYPE_F16:
-        case GGML_TYPE_BF16:
-        case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q4_1:
-        case GGML_TYPE_Q5_0:
-        case GGML_TYPE_Q5_1:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_Q8_1:
-        case GGML_TYPE_Q2_K:
-        case GGML_TYPE_Q3_K:
-        case GGML_TYPE_Q4_K:
-        case GGML_TYPE_Q5_K:
-        case GGML_TYPE_Q6_K:
-        case GGML_TYPE_TQ1_0:
-        case GGML_TYPE_TQ2_0:
-        case GGML_TYPE_IQ2_XXS:
-        case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ3_XXS:
-        case GGML_TYPE_IQ1_S:
-        case GGML_TYPE_IQ1_M:
-        case GGML_TYPE_IQ4_NL:
-        case GGML_TYPE_IQ4_XS:
-        case GGML_TYPE_IQ3_S:
-        case GGML_TYPE_IQ2_S:
-        case GGML_TYPE_Q8_K:
-        case GGML_TYPE_Q4_0_4_4:
-        case GGML_TYPE_Q4_0_4_8:
-        case GGML_TYPE_Q4_0_8_8:
-        case GGML_TYPE_I8:
-        case GGML_TYPE_I16:
-        case GGML_TYPE_I32:
-        case GGML_TYPE_I64:
-        case GGML_TYPE_F64:
-        case GGML_TYPE_COUNT:
+        default:
             {
                 GGML_ABORT("fatal error");
             }

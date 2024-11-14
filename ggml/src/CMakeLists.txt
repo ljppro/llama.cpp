@@ -158,6 +158,7 @@ if (GGML_MUSA)
 endif()
 
 if (GGML_OPENMP)
+    # set(OpenMP_RUNTIME_MSVC "experimental")
     find_package(OpenMP)
     if (OpenMP_FOUND)
         message(STATUS "OpenMP found")
@@ -172,6 +173,18 @@ if (GGML_OPENMP)
         endif()
     else()
         message(WARNING "OpenMP not found")
+    endif()
+endif()
+
+if (GGML_OPENMP_SIMD)
+    check_cxx_compiler_flag("-fopenmp-simd" SUPPORTS_OPENMP_SIMD)
+    if (SUPPORTS_OPENMP_SIMD)
+        # OpenMP_RUNTIME_MSVC=experimental / if (MSVC)
+        message(STATUS "Using openmp_simd.")
+        add_compile_definitions(GGML_USE_OPENMP_SIMD)
+        set(OPENMP_SIMD_FLAGS -fopenmp-simd)
+    else()
+        message(WARNING "C++ compiler lacks OPENMP_SIMD support.")
     endif()
 endif()
 
@@ -1371,6 +1384,14 @@ endif()
 # libraries
 #
 
+# FP8
+file(GLOB GGML_HEADERS_FP8 "ggml-fp8.h")
+file(GLOB GGML_SOURCES_FP8 "ggml-fp8.cpp")
+
+if (OPENMP_SIMD_FLAGS)
+    set_source_files_properties(${GGML_SOURCES_FP8} PROPERTIES COMPILE_FLAGS ${OPENMP_SIMD_FLAGS})
+endif()
+
 # ggml
 
 add_library(ggml
@@ -1398,6 +1419,7 @@ add_library(ggml
             ${GGML_SOURCES_AMX}       ${GGML_HEADERS_AMX}
             ${GGML_SOURCES_CANN}      ${GGML_HEADERS_CANN}
             ggml-aarch64.c            ggml-aarch64.h
+            ${GGML_SOURCES_FP8}       ${GGML_HEADERS_FP8}
             )
 
 if (EMSCRIPTEN)

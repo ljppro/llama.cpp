@@ -138,6 +138,10 @@ GGML_NO_OPENMP := 1
 DEPRECATE_WARNING := 1
 endif
 
+ifdef LLAMA_NO_OPENMP_SIMD
+GGML_NO_OPENMP_SIMD := 1
+endif
+
 ifdef LLAMA_NO_METAL
 GGML_NO_METAL := 1
 DEPRECATE_WARNING := 1
@@ -548,6 +552,13 @@ ifndef GGML_NO_OPENMP
 	endif # GGML_MUSA
 endif # GGML_NO_OPENMP
 
+ifndef GGML_NO_OPENMP_SIMD
+	MK_CPPFLAGS += -DGGML_USE_OPENMP_SIMD
+	MK_CFLAGS   += -fopenmp-simd
+	MK_CXXFLAGS += -fopenmp-simd
+	# -openmp:experimental pour MSVC?
+endif # GGML_NO_OPENMP_SIMD
+
 ifdef GGML_OPENBLAS
 	MK_CPPFLAGS += -DGGML_USE_BLAS $(shell pkg-config --cflags-only-I openblas)
 	MK_CFLAGS   += $(shell pkg-config --cflags-only-other openblas)
@@ -923,7 +934,8 @@ OBJ_GGML += \
 	ggml/src/ggml-alloc.o \
 	ggml/src/ggml-backend.o \
 	ggml/src/ggml-quants.o \
-	ggml/src/ggml-aarch64.o
+	ggml/src/ggml-aarch64.o \
+	ggml/src/ggml-fp8.o
 
 OBJ_LLAMA = \
 	src/llama.o \
@@ -1083,6 +1095,12 @@ ggml/src/ggml-aarch64.o: \
 	ggml/src/ggml-aarch64.h \
 	ggml/src/ggml-common.h
 	$(CC) $(CFLAGS)    -c $< -o $@
+
+ggml/src/ggml-fp8.o: \
+	ggml/src/ggml-fp8.cpp \
+	ggml/src/ggml-fp8.h \
+	ggml/src/ggml-common.h
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 ggml/src/ggml-blas.o: \
 	ggml/src/ggml-blas.cpp \
