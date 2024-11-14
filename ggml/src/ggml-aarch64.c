@@ -187,6 +187,8 @@ static inline __m256i mul_sum_i8_pairs_int32x8(const __m256i x, const __m256i y)
 }
 #endif
 
+static const int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
+
 static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave, unsigned int xor_mask) {
     block_q4_0x4 out;
 
@@ -584,6 +586,42 @@ static size_t quantize_q4_0_nr_bl(const float * restrict src, void * restrict ds
     return ((nrow * n_per_row) / QK4_0 * sizeof(block_q4_0));
 }
 
+static size_t quantize_iq4_nl_nr_bl(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, int nrows_interleaved, int blck_size_interleave) {
+    assert(n_per_row % QK4_NL == 0);
+    const int nb = n_per_row / QK4_NL;
+
+    void * out_ptr = NULL;
+    if (nrows_interleaved == 8) {
+        out_ptr = (block_q4_0x8 *) dst;
+    }
+    else if (nrows_interleaved == 4) {
+        out_ptr = (block_q4_0x4 *) dst;
+    }
+    assert(nrows_interleaved <= 8);
+    block_q4_0 dst_tmp[8];
+
+    for (int b = 0; b < (nrow * n_per_row); b += nrows_interleaved * n_per_row) {
+
+        for (int64_t x = 0; x < nb; x++) {
+
+            for (int i  = 0; i < nrows_interleaved; i++ ) {
+                quantize_row_iq4_nl_ref(src + b + i * n_per_row + x * QK4_NL, (block_iq4_nl *) dst_tmp + i, QK4_NL);
+            }
+
+            if (nrows_interleaved == 8) {
+                *(block_q4_0x8 *) out_ptr = make_block_q4_0x8(dst_tmp, blck_size_interleave, 0x00);
+                out_ptr = (block_q4_0x8 *) out_ptr + 1;
+            }
+            else if (nrows_interleaved == 4) {
+                *(block_q4_0x4 *) out_ptr = make_block_q4_0x4(dst_tmp, blck_size_interleave, 0x00);
+                out_ptr = (block_q4_0x4 *) out_ptr + 1;
+            }
+        }
+    }
+
+    return ((nrow * n_per_row) / QK4_NL * sizeof(block_iq4_nl));
+}
+
 size_t quantize_q4_0_4x4(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     UNUSED(quant_weights);
     return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 4, 4);
@@ -597,6 +635,11 @@ size_t quantize_q4_0_4x8(const float * restrict src, void * restrict dst, int64_
 size_t quantize_q4_0_8x8(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     UNUSED(quant_weights);
     return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 8, 8);
+}
+
+size_t quantize_iq4_nl_4x4(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    UNUSED(quant_weights);
+    return quantize_iq4_nl_nr_bl(src, dst, nrow, n_per_row, 4, 4);
 }
 
 void ggml_gemv_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
@@ -620,62 +663,75 @@ void ggml_gemv_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * 
 
 #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
     if (ggml_cpu_has_neon()) {
-        const void * b_ptr = vx;
-        const void * a_ptr = vy;
+        const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
         float * res_ptr = s;
 
-        __asm__ __volatile__(
-            "movi v31.16b, #0x4\n"
-            "movi v30.16b, #0xf0\n"
-            "add %x[b_ptr], %x[b_ptr], #0x8\n"
-            "1:"  // Column loop
-            "add x22, %x[a_ptr], #0x2\n"
-            "movi v29.16b, #0x0\n"
-            "mov x21, %x[nb]\n"
-            "2:"  // Block loop
-            "ldr q28, [%x[b_ptr], #0x0]\n"
-            "ldr q27, [x22, #0x0]\n"
-            "movi v26.4s, #0x0\n"
-            "sub x20, x22, #0x2\n"
-            "ldr q25, [x22, #0x10]\n"
-            "ldr q24, [%x[b_ptr], #0x10]\n"
-            "sub x21, x21, #0x1\n"
-            "add x22, x22, #0x22\n"
-            "ldr q23, [%x[b_ptr], #0x20]\n"
-            "ldr q22, [%x[b_ptr], #0x30]\n"
-            "ld1r { v21.8h }, [x20]\n"
-            "ldr q20, [%x[b_ptr], #-0x8]\n"
-            "sshl v16.16b, v28.16b, v31.16b\n"
-            "and v28.16b, v28.16b, v30.16b\n"
-            "sshl v19.16b, v24.16b, v31.16b\n"
-            "and v24.16b, v24.16b, v30.16b\n"
-            "add %x[b_ptr], %x[b_ptr], #0x48\n"
-            "sshl v18.16b, v23.16b, v31.16b\n"
-            "and v23.16b, v23.16b, v30.16b\n"
-            ".inst 0x4f9be21a  // sdot v26.4s, v16.16b, v27.4b[0]\n"
-            "sshl v17.16b, v22.16b, v31.16b\n"
-            "and v22.16b, v22.16b, v30.16b\n"
-            "fcvtl v21.4s, v21.4h\n"
-            "fcvtl v16.4s, v20.4h\n"
-            ".inst 0x4f99e39a  // sdot v26.4s, v28.16b, v25.4b[0]\n"
-            "fmul v16.4s, v16.4s, v21.4s\n"
-            ".inst 0x4fbbe27a  // sdot v26.4s, v19.16b, v27.4b[1]\n"
-            ".inst 0x4fb9e31a  // sdot v26.4s, v24.16b, v25.4b[1]\n"
-            ".inst 0x4f9bea5a  // sdot v26.4s, v18.16b, v27.4b[2]\n"
-            ".inst 0x4f99eafa  // sdot v26.4s, v23.16b, v25.4b[2]\n"
-            ".inst 0x4fbbea3a  // sdot v26.4s, v17.16b, v27.4b[3]\n"
-            ".inst 0x4fb9eada  // sdot v26.4s, v22.16b, v25.4b[3]\n"
-            "scvtf v26.4s, v26.4s, #0x4\n"
-            "fmla v29.4s, v26.4s, v16.4s\n"
-            "cbnz x21, 2b\n"
-            "sub %x[nc], %x[nc], #0x4\n"
-            "str q29, [%x[res_ptr], #0x0]\n"
-            "add %x[res_ptr], %x[res_ptr], #0x10\n"
-            "cbnz %x[nc], 1b\n"
-            : [b_ptr] "+&r" (b_ptr), [res_ptr] "+&r" (res_ptr), [nc] "+&r" (nc)
-            : [a_ptr] "r" (a_ptr), [nb] "r" (nb)
-            : "memory", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "x20", "x21", "x22"
-            );
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            // %x[nc] : loop control
+
+            const block_q4_0x4 * b_ptr = (const block_q4_0x4 *) vx + (x * nb);
+
+            float32x4_t sumf = vdupq_n_f32(0);
+            // v29 = sumf
+
+            for (int l = 0; l < nb; l++) {
+                // x21 : loop control
+
+                // x22 = a_ptr[l].qs
+                // %x[b_ptr] = b_ptr[l].qs
+
+                int8x16_t a_0 = vld1q_s8(a_ptr[l].qs + 0);
+                int8x16_t a_1 = vld1q_s8(a_ptr[l].qs + 16);
+                // (v27, v25) = (a_0, a_1)
+
+                uint8x16_t b_0 = vld1q_u8(b_ptr[l].qs + 0);
+                uint8x16_t b_1 = vld1q_u8(b_ptr[l].qs + 16);
+                uint8x16_t b_2 = vld1q_u8(b_ptr[l].qs + 32);
+                uint8x16_t b_3 = vld1q_u8(b_ptr[l].qs + 48);
+                // (v28, v24, v23, v22) = (b_0, b_1, b_2, b_3)
+
+                float16x4_t b_d_half = vld1_f16((const float16_t *)b_ptr[l].d);
+                // v20 = b_d_half
+
+                int8x16_t b_0_hi = vreinterpretq_s8_u8(b_0 & 0xF0);
+                int8x16_t b_0_lo = vreinterpretq_s8_u8(b_0 << 4);
+                int8x16_t b_1_hi = vreinterpretq_s8_u8(b_1 & 0xF0);
+                int8x16_t b_1_lo = vreinterpretq_s8_u8(b_1 << 4);
+                int8x16_t b_2_hi = vreinterpretq_s8_u8(b_2 & 0xF0);
+                int8x16_t b_2_lo = vreinterpretq_s8_u8(b_2 << 4);
+                int8x16_t b_3_hi = vreinterpretq_s8_u8(b_3 & 0xF0);
+                int8x16_t b_3_lo = vreinterpretq_s8_u8(b_3 << 4);
+                // (v16, v28) = (b_0_lo, b_0_hi)
+                // (v19, v24) = (b_0_lo, b_0_hi)
+                // (v18, v23) = (b_0_lo, b_0_hi)
+                // (v17, v22) = (b_0_lo, b_0_hi)
+
+                int32x4_t sumi = vdupq_n_s32(0);
+                // v26 = sumi
+                sumi = vdotq_laneq_s32(sumi, b_0_lo, a_0, 0);
+                sumi = vdotq_laneq_s32(sumi, b_0_hi, a_1, 0);
+                sumi = vdotq_laneq_s32(sumi, b_1_lo, a_0, 1);
+                sumi = vdotq_laneq_s32(sumi, b_1_hi, a_1, 1);
+                sumi = vdotq_laneq_s32(sumi, b_2_lo, a_0, 2);
+                sumi = vdotq_laneq_s32(sumi, b_2_hi, a_1, 2);
+                sumi = vdotq_laneq_s32(sumi, b_3_lo, a_0, 3);
+                sumi = vdotq_laneq_s32(sumi, b_3_hi, a_1, 3);
+
+                float32x4_t a_d = vcvt_f32_f16(vld1_dup_f16((const float16_t *)&a_ptr[l].d));
+                // v21 = a_d
+
+                float32x4_t b_d = vcvt_f32_f16(b_d_half);
+                // v16 = b_d
+
+                float32x4_t d = a_d * b_d;
+                // v16 = d
+
+                sumf = vmlaq_f32(sumf, d, vcvtq_n_f32_s32(sumi, 4));
+            }
+
+            vst1q_f32(res_ptr + x * 4, sumf);
+            // %x[res_ptr] = res_ptr + x * 4
+        }
         return;
     }
 #endif // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
@@ -1087,6 +1143,102 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * 
     }
 }
 
+void ggml_gemv_iq4_nl_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    const int ncols_interleaved = 4;
+    const int blocklen = 4;
+
+    assert (n % qk == 0);
+    assert (nc % ncols_interleaved == 0);
+
+    UNUSED(s);
+    UNUSED(bs);
+    UNUSED(vx);
+    UNUSED(vy);
+    UNUSED(nr);
+    UNUSED(nc);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
+    if (ggml_cpu_has_neon()) {
+        const int8x16_t kvalues = vld1q_s8(kvalues_iq4nl);
+        const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
+        float * res_ptr = s;
+
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_q4_0x4 * b_ptr = (const block_q4_0x4 *) vx + (x * nb);
+
+            float32x4_t sumf = vdupq_n_f32(0);
+            for (int l = 0; l < nb; l++) {
+                uint8x16_t b_0 = vld1q_u8(b_ptr[l].qs + 0);
+                uint8x16_t b_1 = vld1q_u8(b_ptr[l].qs + 16);
+                uint8x16_t b_2 = vld1q_u8(b_ptr[l].qs + 32);
+                uint8x16_t b_3 = vld1q_u8(b_ptr[l].qs + 48);
+
+                int8x16_t b_0_hi = vqtbl1q_s8(kvalues, b_0 >> 4);
+                int8x16_t b_0_lo = vqtbl1q_s8(kvalues, b_0 & 0x0F);
+                int8x16_t b_1_hi = vqtbl1q_s8(kvalues, b_1 >> 4);
+                int8x16_t b_1_lo = vqtbl1q_s8(kvalues, b_1 & 0x0F);
+                int8x16_t b_2_hi = vqtbl1q_s8(kvalues, b_2 >> 4);
+                int8x16_t b_2_lo = vqtbl1q_s8(kvalues, b_2 & 0x0F);
+                int8x16_t b_3_hi = vqtbl1q_s8(kvalues, b_3 >> 4);
+                int8x16_t b_3_lo = vqtbl1q_s8(kvalues, b_3 & 0x0F);
+
+                int8x16_t a_0 = vld1q_s8(a_ptr[l].qs + 0);
+                int8x16_t a_1 = vld1q_s8(a_ptr[l].qs + 16);
+
+                int32x4_t sumi = vdupq_n_s32(0);
+                sumi = vdotq_laneq_s32(sumi, b_0_lo, a_0, 0);
+                sumi = vdotq_laneq_s32(sumi, b_0_hi, a_1, 0);
+                sumi = vdotq_laneq_s32(sumi, b_1_lo, a_0, 1);
+                sumi = vdotq_laneq_s32(sumi, b_1_hi, a_1, 1);
+                sumi = vdotq_laneq_s32(sumi, b_2_lo, a_0, 2);
+                sumi = vdotq_laneq_s32(sumi, b_2_hi, a_1, 2);
+                sumi = vdotq_laneq_s32(sumi, b_3_lo, a_0, 3);
+                sumi = vdotq_laneq_s32(sumi, b_3_hi, a_1, 3);
+
+                float32x4_t a_d = vcvt_f32_f16(vld1_dup_f16((const float16_t *)&a_ptr[l].d));
+                float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *)b_ptr[l].d));
+                float32x4_t d = a_d * b_d;
+
+                sumf = vmlaq_f32(sumf, d, vcvtq_f32_s32(sumi));
+            }
+
+            vst1q_f32(res_ptr + x * 4, sumf);
+        }
+        return;
+    }
+#endif // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
+    {
+        float sumf[4];
+        int sumi;
+
+        const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_iq4_nlx4 * b_ptr = (const block_iq4_nlx4 *) vx + (x * nb);
+
+            for (int j = 0; j < ncols_interleaved; j++) sumf[j] = 0.0;
+            for (int l = 0; l < nb; l++) {
+                for (int k = 0; k < (qk / (2 * blocklen)); k++) {
+                    for (int j = 0; j < ncols_interleaved; j++) {
+                        sumi = 0;
+                        for (int i = 0; i < blocklen; ++i) {
+                            const int v0 = kvalues_iq4nl[b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0x0F];
+                            const int v1 = kvalues_iq4nl[b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4];
+                            sumi += ((v0 * a_ptr[l].qs[k * blocklen + i]) + (v1 * a_ptr[l].qs[k * blocklen + i + qk / 2]));
+                        }
+                        sumf[j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_FP16_TO_FP32(a_ptr[l].d);
+                    }
+                }
+            }
+            for (int j = 0; j < ncols_interleaved; j++) s[x * ncols_interleaved + j] = sumf[j];
+        }
+    }
+}
+
 void ggml_gemm_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -1109,461 +1261,181 @@ void ggml_gemm_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * 
 
 #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
     if (ggml_cpu_has_neon()) {
-        const void * b_ptr = vx;
-        const void * a_ptr = vy;
-        float * res_ptr = s;
-        size_t res_stride = bs * sizeof(float);
+#define UNROLL_FACTOR 4
+        int y = 0;
+        for (; y + UNROLL_FACTOR <= nr / 4; y += UNROLL_FACTOR) {
+            const block_q8_0x4 * a_ptr[UNROLL_FACTOR];
+            for (int z = 0; z < UNROLL_FACTOR; z++) {
+                a_ptr[z] = (const block_q8_0x4 *) vy + ((y + z) * nb);
+            }
 
-        __asm__ __volatile__(
-            "mov x10, %x[nr]\n"
-            "mov x9, #0x88\n"
-            "cmp x10, #0x10\n"
-            "mul x9, %x[nb], x9\n"
-            "blt 4f\n"
-            "1:"  // Row loop
-            "add x28, %x[b_ptr], #0x8\n"
-            "mov x27, %x[nc]\n"
-            "add x26, %x[res_ptr], %x[res_stride], LSL #4\n"
-            "2:"  // Column loop
-            "add x25, %x[a_ptr], #0x8\n"
-            "movi v15.16b, #0x0\n"
-            "movi v19.16b, #0x0\n"
-            "mov x24, %x[nb]\n"
-            "add x23, x25, x9\n"
-            "movi v18.16b, #0x0\n"
-            "movi v14.16b, #0x0\n"
-            "add x22, x23, x9\n"
-            "movi v11.16b, #0x0\n"
-            "movi v13.16b, #0x0\n"
-            "add x21, x22, x9\n"
-            "movi v23.16b, #0x0\n"
-            "movi v16.16b, #0x0\n"
-            "movi v25.16b, #0x0\n"
-            "movi v7.16b, #0x0\n"
-            "movi v0.16b, #0x0\n"
-            "movi v4.16b, #0x0\n"
-            "movi v5.16b, #0x0\n"
-            "movi v21.16b, #0x0\n"
-            "movi v8.16b, #0x0\n"
-            "movi v1.16b, #0x0\n"
-            "3:"  // Block loop
-            "ldr q3, [x28, #0x0]\n"
-            "ldr q31, [x25, #0x0]\n"
-            "movi v28.16b, #0x4\n"
-            "movi v10.4s, #0x0\n"
-            "ldr q22, [x28, #0x10]\n"
-            "ldr q6, [x25, #0x10]\n"
-            "movi v29.4s, #0x0\n"
-            "movi v9.4s, #0x0\n"
-            "ldr q27, [x28, #0x20]\n"
-            "ldr q30, [x28, #0x30]\n"
-            "movi v20.4s, #0x0\n"
-            "movi v24.16b, #0xf0\n"
-            "ldr d2, [x25, #-0x8]\n"
-            "ldr d26, [x23, #-0x8]\n"
-            "sshl v12.16b, v3.16b, v28.16b\n"
-            "sub x20, x28, #0x8\n"
-            "ldr d17, [x20, #0x0]\n"
-            "and v3.16b, v3.16b, v24.16b\n"
-            "subs x24, x24, #0x1\n"
-            "add x28, x28, #0x48\n"
-            ".inst 0x4f9fe18a  // sdot v10.4s, v12.16b, v31.4b[0]\n"
-            ".inst 0x4fbfe19d  // sdot v29.4s, v12.16b, v31.4b[1]\n"
-            ".inst 0x4f9fe989  // sdot v9.4s, v12.16b, v31.4b[2]\n"
-            ".inst 0x4fbfe994  // sdot v20.4s, v12.16b, v31.4b[3]\n"
-            "sshl v31.16b, v22.16b, v28.16b\n"
-            "and v22.16b, v22.16b, v24.16b\n"
-            "fcvtl v17.4s, v17.4h\n"
-            "fcvtl v2.4s, v2.4h\n"
-            "fcvtl v26.4s, v26.4h\n"
-            ".inst 0x4f86e3ea  // sdot v10.4s, v31.16b, v6.4b[0]\n"
-            ".inst 0x4fa6e3fd  // sdot v29.4s, v31.16b, v6.4b[1]\n"
-            ".inst 0x4f86ebe9  // sdot v9.4s, v31.16b, v6.4b[2]\n"
-            ".inst 0x4fa6ebf4  // sdot v20.4s, v31.16b, v6.4b[3]\n"
-            "sshl v6.16b, v27.16b, v28.16b\n"
-            "sshl v28.16b, v30.16b, v28.16b\n"
-            "and v27.16b, v27.16b, v24.16b\n"
-            "and v30.16b, v30.16b, v24.16b\n"
-            "ldr q24, [x25, #0x20]\n"
-            ".inst 0x4f98e0ca  // sdot v10.4s, v6.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e0dd  // sdot v29.4s, v6.16b, v24.4b[1]\n"
-            ".inst 0x4f98e8c9  // sdot v9.4s, v6.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e8d4  // sdot v20.4s, v6.16b, v24.4b[3]\n"
-            "ldr q24, [x25, #0x30]\n"
-            ".inst 0x4f98e38a  // sdot v10.4s, v28.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e39d  // sdot v29.4s, v28.16b, v24.4b[1]\n"
-            ".inst 0x4f98eb89  // sdot v9.4s, v28.16b, v24.4b[2]\n"
-            ".inst 0x4fb8eb94  // sdot v20.4s, v28.16b, v24.4b[3]\n"
-            "ldr q24, [x25, #0x40]\n"
-            ".inst 0x4f98e06a  // sdot v10.4s, v3.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e07d  // sdot v29.4s, v3.16b, v24.4b[1]\n"
-            ".inst 0x4f98e869  // sdot v9.4s, v3.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e874  // sdot v20.4s, v3.16b, v24.4b[3]\n"
-            "ldr q24, [x25, #0x50]\n"
-            ".inst 0x4f98e2ca  // sdot v10.4s, v22.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e2dd  // sdot v29.4s, v22.16b, v24.4b[1]\n"
-            ".inst 0x4f98eac9  // sdot v9.4s, v22.16b, v24.4b[2]\n"
-            ".inst 0x4fb8ead4  // sdot v20.4s, v22.16b, v24.4b[3]\n"
-            "ldr q24, [x25, #0x60]\n"
-            ".inst 0x4f98e36a  // sdot v10.4s, v27.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e37d  // sdot v29.4s, v27.16b, v24.4b[1]\n"
-            ".inst 0x4f98eb69  // sdot v9.4s, v27.16b, v24.4b[2]\n"
-            ".inst 0x4fb8eb74  // sdot v20.4s, v27.16b, v24.4b[3]\n"
-            "ldr q24, [x25, #0x70]\n"
-            "add x25, x25, #0x88\n"
-            ".inst 0x4f98e3ca  // sdot v10.4s, v30.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e3dd  // sdot v29.4s, v30.16b, v24.4b[1]\n"
-            ".inst 0x4f98ebc9  // sdot v9.4s, v30.16b, v24.4b[2]\n"
-            ".inst 0x4fb8ebd4  // sdot v20.4s, v30.16b, v24.4b[3]\n"
-            "fmul v24.4s, v17.4s, v2.s[0]\n"
-            "scvtf v10.4s, v10.4s, #0x4\n"
-            "scvtf v29.4s, v29.4s, #0x4\n"
-            "scvtf v9.4s, v9.4s, #0x4\n"
-            "scvtf v20.4s, v20.4s, #0x4\n"
-            "fmla v15.4s, v10.4s, v24.4s\n"
-            "ldr q24, [x23, #0x0]\n"
-            "fmul v10.4s, v17.4s, v2.s[1]\n"
-            "fmla v19.4s, v29.4s, v10.4s\n"
-            "ldr q10, [x23, #0x10]\n"
-            "fmul v29.4s, v17.4s, v2.s[2]\n"
-            "fmul v2.4s, v17.4s, v2.s[3]\n"
-            "fmla v18.4s, v9.4s, v29.4s\n"
-            "movi v9.4s, #0x0\n"
-            "movi v29.4s, #0x0\n"
-            ".inst 0x4f98e189  // sdot v9.4s, v12.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e19d  // sdot v29.4s, v12.16b, v24.4b[1]\n"
-            "fmla v14.4s, v20.4s, v2.4s\n"
-            "movi v20.4s, #0x0\n"
-            "movi v2.4s, #0x0\n"
-            ".inst 0x4f98e994  // sdot v20.4s, v12.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e982  // sdot v2.4s, v12.16b, v24.4b[3]\n"
-            "ldr q24, [x23, #0x20]\n"
-            ".inst 0x4f8ae3e9  // sdot v9.4s, v31.16b, v10.4b[0]\n"
-            ".inst 0x4faae3fd  // sdot v29.4s, v31.16b, v10.4b[1]\n"
-            ".inst 0x4f8aebf4  // sdot v20.4s, v31.16b, v10.4b[2]\n"
-            ".inst 0x4faaebe2  // sdot v2.4s, v31.16b, v10.4b[3]\n"
-            "ldr q10, [x23, #0x30]\n"
-            ".inst 0x4f98e0c9  // sdot v9.4s, v6.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e0dd  // sdot v29.4s, v6.16b, v24.4b[1]\n"
-            ".inst 0x4f98e8d4  // sdot v20.4s, v6.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e8c2  // sdot v2.4s, v6.16b, v24.4b[3]\n"
-            "ldr q24, [x23, #0x40]\n"
-            ".inst 0x4f8ae389  // sdot v9.4s, v28.16b, v10.4b[0]\n"
-            ".inst 0x4faae39d  // sdot v29.4s, v28.16b, v10.4b[1]\n"
-            ".inst 0x4f8aeb94  // sdot v20.4s, v28.16b, v10.4b[2]\n"
-            ".inst 0x4faaeb82  // sdot v2.4s, v28.16b, v10.4b[3]\n"
-            "ldr q10, [x23, #0x50]\n"
-            ".inst 0x4f98e069  // sdot v9.4s, v3.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e07d  // sdot v29.4s, v3.16b, v24.4b[1]\n"
-            ".inst 0x4f98e874  // sdot v20.4s, v3.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e862  // sdot v2.4s, v3.16b, v24.4b[3]\n"
-            "ldr q24, [x23, #0x60]\n"
-            ".inst 0x4f8ae2c9  // sdot v9.4s, v22.16b, v10.4b[0]\n"
-            ".inst 0x4faae2dd  // sdot v29.4s, v22.16b, v10.4b[1]\n"
-            ".inst 0x4f8aead4  // sdot v20.4s, v22.16b, v10.4b[2]\n"
-            ".inst 0x4faaeac2  // sdot v2.4s, v22.16b, v10.4b[3]\n"
-            "ldr q10, [x23, #0x70]\n"
-            "add x23, x23, #0x88\n"
-            ".inst 0x4f98e369  // sdot v9.4s, v27.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e37d  // sdot v29.4s, v27.16b, v24.4b[1]\n"
-            ".inst 0x4f98eb74  // sdot v20.4s, v27.16b, v24.4b[2]\n"
-            ".inst 0x4fb8eb62  // sdot v2.4s, v27.16b, v24.4b[3]\n"
-            "ldr q24, [x22, #0x0]\n"
-            ".inst 0x4f8ae3c9  // sdot v9.4s, v30.16b, v10.4b[0]\n"
-            ".inst 0x4faae3dd  // sdot v29.4s, v30.16b, v10.4b[1]\n"
-            ".inst 0x4f8aebd4  // sdot v20.4s, v30.16b, v10.4b[2]\n"
-            ".inst 0x4faaebc2  // sdot v2.4s, v30.16b, v10.4b[3]\n"
-            "fmul v10.4s, v17.4s, v26.s[0]\n"
-            "scvtf v9.4s, v9.4s, #0x4\n"
-            "scvtf v29.4s, v29.4s, #0x4\n"
-            "scvtf v20.4s, v20.4s, #0x4\n"
-            "scvtf v2.4s, v2.4s, #0x4\n"
-            "fmla v11.4s, v9.4s, v10.4s\n"
-            "ldr q9, [x22, #0x10]\n"
-            "fmul v10.4s, v17.4s, v26.s[1]\n"
-            "fmla v13.4s, v29.4s, v10.4s\n"
-            "ldr d29, [x22, #-0x8]\n"
-            "fmul v10.4s, v17.4s, v26.s[2]\n"
-            "fmul v26.4s, v17.4s, v26.s[3]\n"
-            "fcvtl v29.4s, v29.4h\n"
-            "fmla v23.4s, v20.4s, v10.4s\n"
-            "movi v20.4s, #0x0\n"
-            "movi v10.4s, #0x0\n"
-            "fmla v16.4s, v2.4s, v26.4s\n"
-            "movi v26.4s, #0x0\n"
-            "movi v2.4s, #0x0\n"
-            ".inst 0x4f98e194  // sdot v20.4s, v12.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e18a  // sdot v10.4s, v12.16b, v24.4b[1]\n"
-            ".inst 0x4f98e99a  // sdot v26.4s, v12.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e982  // sdot v2.4s, v12.16b, v24.4b[3]\n"
-            "ldr q24, [x22, #0x20]\n"
-            ".inst 0x4f89e3f4  // sdot v20.4s, v31.16b, v9.4b[0]\n"
-            ".inst 0x4fa9e3ea  // sdot v10.4s, v31.16b, v9.4b[1]\n"
-            ".inst 0x4f89ebfa  // sdot v26.4s, v31.16b, v9.4b[2]\n"
-            ".inst 0x4fa9ebe2  // sdot v2.4s, v31.16b, v9.4b[3]\n"
-            "ldr q9, [x22, #0x30]\n"
-            ".inst 0x4f98e0d4  // sdot v20.4s, v6.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e0ca  // sdot v10.4s, v6.16b, v24.4b[1]\n"
-            ".inst 0x4f98e8da  // sdot v26.4s, v6.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e8c2  // sdot v2.4s, v6.16b, v24.4b[3]\n"
-            "ldr q24, [x22, #0x40]\n"
-            ".inst 0x4f89e394  // sdot v20.4s, v28.16b, v9.4b[0]\n"
-            ".inst 0x4fa9e38a  // sdot v10.4s, v28.16b, v9.4b[1]\n"
-            ".inst 0x4f89eb9a  // sdot v26.4s, v28.16b, v9.4b[2]\n"
-            ".inst 0x4fa9eb82  // sdot v2.4s, v28.16b, v9.4b[3]\n"
-            "ldr q9, [x22, #0x50]\n"
-            ".inst 0x4f98e074  // sdot v20.4s, v3.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e06a  // sdot v10.4s, v3.16b, v24.4b[1]\n"
-            ".inst 0x4f98e87a  // sdot v26.4s, v3.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e862  // sdot v2.4s, v3.16b, v24.4b[3]\n"
-            "ldr q24, [x22, #0x60]\n"
-            ".inst 0x4f89e2d4  // sdot v20.4s, v22.16b, v9.4b[0]\n"
-            ".inst 0x4fa9e2ca  // sdot v10.4s, v22.16b, v9.4b[1]\n"
-            ".inst 0x4f89eada  // sdot v26.4s, v22.16b, v9.4b[2]\n"
-            ".inst 0x4fa9eac2  // sdot v2.4s, v22.16b, v9.4b[3]\n"
-            "ldr q9, [x22, #0x70]\n"
-            "add x22, x22, #0x88\n"
-            ".inst 0x4f98e374  // sdot v20.4s, v27.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e36a  // sdot v10.4s, v27.16b, v24.4b[1]\n"
-            ".inst 0x4f98eb7a  // sdot v26.4s, v27.16b, v24.4b[2]\n"
-            ".inst 0x4fb8eb62  // sdot v2.4s, v27.16b, v24.4b[3]\n"
-            "ldr q24, [x21, #0x0]\n"
-            ".inst 0x4f89e3d4  // sdot v20.4s, v30.16b, v9.4b[0]\n"
-            ".inst 0x4fa9e3ca  // sdot v10.4s, v30.16b, v9.4b[1]\n"
-            ".inst 0x4f89ebda  // sdot v26.4s, v30.16b, v9.4b[2]\n"
-            ".inst 0x4fa9ebc2  // sdot v2.4s, v30.16b, v9.4b[3]\n"
-            "fmul v9.4s, v17.4s, v29.s[0]\n"
-            "scvtf v20.4s, v20.4s, #0x4\n"
-            "scvtf v10.4s, v10.4s, #0x4\n"
-            "scvtf v26.4s, v26.4s, #0x4\n"
-            "scvtf v2.4s, v2.4s, #0x4\n"
-            "fmla v25.4s, v20.4s, v9.4s\n"
-            "ldr q9, [x21, #0x10]\n"
-            "fmul v20.4s, v17.4s, v29.s[1]\n"
-            "fmla v7.4s, v10.4s, v20.4s\n"
-            "ldr d20, [x21, #-0x8]\n"
-            "fmul v10.4s, v17.4s, v29.s[2]\n"
-            "fmul v29.4s, v17.4s, v29.s[3]\n"
-            "fcvtl v20.4s, v20.4h\n"
-            "fmla v0.4s, v26.4s, v10.4s\n"
-            "movi v26.4s, #0x0\n"
-            "movi v10.4s, #0x0\n"
-            "fmla v4.4s, v2.4s, v29.4s\n"
-            "movi v2.4s, #0x0\n"
-            "movi v29.4s, #0x0\n"
-            ".inst 0x4f98e19a  // sdot v26.4s, v12.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e18a  // sdot v10.4s, v12.16b, v24.4b[1]\n"
-            ".inst 0x4f98e982  // sdot v2.4s, v12.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e99d  // sdot v29.4s, v12.16b, v24.4b[3]\n"
-            "ldr q12, [x21, #0x20]\n"
-            "fmul v24.4s, v17.4s, v20.s[0]\n"
-            ".inst 0x4f89e3fa  // sdot v26.4s, v31.16b, v9.4b[0]\n"
-            ".inst 0x4fa9e3ea  // sdot v10.4s, v31.16b, v9.4b[1]\n"
-            ".inst 0x4f89ebe2  // sdot v2.4s, v31.16b, v9.4b[2]\n"
-            ".inst 0x4fa9ebfd  // sdot v29.4s, v31.16b, v9.4b[3]\n"
-            "ldr q9, [x21, #0x30]\n"
-            "fmul v31.4s, v17.4s, v20.s[1]\n"
-            ".inst 0x4f8ce0da  // sdot v26.4s, v6.16b, v12.4b[0]\n"
-            ".inst 0x4face0ca  // sdot v10.4s, v6.16b, v12.4b[1]\n"
-            ".inst 0x4f8ce8c2  // sdot v2.4s, v6.16b, v12.4b[2]\n"
-            ".inst 0x4face8dd  // sdot v29.4s, v6.16b, v12.4b[3]\n"
-            "ldr q12, [x21, #0x40]\n"
-            "fmul v6.4s, v17.4s, v20.s[2]\n"
-            "fmul v20.4s, v17.4s, v20.s[3]\n"
-            ".inst 0x4f89e39a  // sdot v26.4s, v28.16b, v9.4b[0]\n"
-            ".inst 0x4fa9e38a  // sdot v10.4s, v28.16b, v9.4b[1]\n"
-            ".inst 0x4f89eb82  // sdot v2.4s, v28.16b, v9.4b[2]\n"
-            ".inst 0x4fa9eb9d  // sdot v29.4s, v28.16b, v9.4b[3]\n"
-            "ldr q9, [x21, #0x50]\n"
-            ".inst 0x4f8ce07a  // sdot v26.4s, v3.16b, v12.4b[0]\n"
-            ".inst 0x4face06a  // sdot v10.4s, v3.16b, v12.4b[1]\n"
-            ".inst 0x4f8ce862  // sdot v2.4s, v3.16b, v12.4b[2]\n"
-            ".inst 0x4face87d  // sdot v29.4s, v3.16b, v12.4b[3]\n"
-            "ldr q12, [x21, #0x60]\n"
-            ".inst 0x4f89e2da  // sdot v26.4s, v22.16b, v9.4b[0]\n"
-            ".inst 0x4fa9e2ca  // sdot v10.4s, v22.16b, v9.4b[1]\n"
-            ".inst 0x4f89eac2  // sdot v2.4s, v22.16b, v9.4b[2]\n"
-            ".inst 0x4fa9eadd  // sdot v29.4s, v22.16b, v9.4b[3]\n"
-            "ldr q17, [x21, #0x70]\n"
-            "add x21, x21, #0x88\n"
-            ".inst 0x4f8ce37a  // sdot v26.4s, v27.16b, v12.4b[0]\n"
-            ".inst 0x4face36a  // sdot v10.4s, v27.16b, v12.4b[1]\n"
-            ".inst 0x4f8ceb62  // sdot v2.4s, v27.16b, v12.4b[2]\n"
-            ".inst 0x4faceb7d  // sdot v29.4s, v27.16b, v12.4b[3]\n"
-            ".inst 0x4f91e3da  // sdot v26.4s, v30.16b, v17.4b[0]\n"
-            ".inst 0x4fb1e3ca  // sdot v10.4s, v30.16b, v17.4b[1]\n"
-            ".inst 0x4f91ebc2  // sdot v2.4s, v30.16b, v17.4b[2]\n"
-            ".inst 0x4fb1ebdd  // sdot v29.4s, v30.16b, v17.4b[3]\n"
-            "scvtf v26.4s, v26.4s, #0x4\n"
-            "scvtf v10.4s, v10.4s, #0x4\n"
-            "fmla v5.4s, v26.4s, v24.4s\n"
-            "scvtf v2.4s, v2.4s, #0x4\n"
-            "scvtf v29.4s, v29.4s, #0x4\n"
-            "fmla v21.4s, v10.4s, v31.4s\n"
-            "fmla v8.4s, v2.4s, v6.4s\n"
-            "fmla v1.4s, v29.4s, v20.4s\n"
-            "bgt 3b\n"
-            "mov x20, %x[res_ptr]\n"
-            "subs x27, x27, #0x4\n"
-            "add %x[res_ptr], %x[res_ptr], #0x10\n"
-            "str q15, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q19, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q18, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q14, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q11, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q13, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q23, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q16, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q25, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q7, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q0, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q4, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q5, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q21, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q8, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "str q1, [x20, #0x0]\n"
-            "bne 2b\n"
-            "mov x20, #0x4\n"
-            "sub x10, x10, #0x10\n"
-            "cmp x10, #0x10\n"
-            "mov %x[res_ptr], x26\n"
-            "madd %x[a_ptr], x20, x9, %x[a_ptr]\n"
-            "bge 1b\n"
-            "4:"  // Row loop skip
-            "cbz x10, 9f\n"
-            "5:"  // Row tail: Row loop
-            "add x24, %x[b_ptr], #0x8\n"
-            "mov x23, %x[nc]\n"
-            "add x22, %x[res_ptr], %x[res_stride], LSL #2\n"
-            "6:"  // Row tail: Column loop
-            "movi v15.16b, #0x0\n"
-            "movi v19.16b, #0x0\n"
-            "add x25, %x[a_ptr], #0x8\n"
-            "mov x21, %x[nb]\n"
-            "movi v18.16b, #0x0\n"
-            "movi v14.16b, #0x0\n"
-            "7:"  // Row tail: Block loop
-            "ldr q7, [x24, #0x0]\n"
-            "ldr q5, [x25, #0x0]\n"
-            "movi v9.16b, #0x4\n"
-            "movi v4.4s, #0x0\n"
-            "ldr q3, [x24, #0x10]\n"
-            "ldr q2, [x25, #0x10]\n"
-            "movi v1.4s, #0x0\n"
-            "movi v0.4s, #0x0\n"
-            "ldr q13, [x24, #0x20]\n"
-            "ldr q31, [x25, #0x20]\n"
-            "movi v30.4s, #0x0\n"
-            "movi v29.16b, #0xf0\n"
-            "ldr q28, [x24, #0x30]\n"
-            "ldr q27, [x25, #0x30]\n"
-            "sshl v20.16b, v7.16b, v9.16b\n"
-            "sub x20, x24, #0x8\n"
-            "ldr q26, [x25, #0x40]\n"
-            "ldr q25, [x25, #0x50]\n"
-            "sshl v17.16b, v3.16b, v9.16b\n"
-            "and v7.16b, v7.16b, v29.16b\n"
-            "ldr q24, [x25, #0x60]\n"
-            "ldr q16, [x25, #0x70]\n"
-            "sshl v22.16b, v13.16b, v9.16b\n"
-            "and v3.16b, v3.16b, v29.16b\n"
-            "ldr d21, [x20, #0x0]\n"
-            "ldr d12, [x25, #-0x8]\n"
-            ".inst 0x4f85e284  // sdot v4.4s, v20.16b, v5.4b[0]\n"
-            ".inst 0x4fa5e281  // sdot v1.4s, v20.16b, v5.4b[1]\n"
-            ".inst 0x4f85ea80  // sdot v0.4s, v20.16b, v5.4b[2]\n"
-            ".inst 0x4fa5ea9e  // sdot v30.4s, v20.16b, v5.4b[3]\n"
-            "sshl v9.16b, v28.16b, v9.16b\n"
-            "subs x21, x21, #0x1\n"
-            "and v13.16b, v13.16b, v29.16b\n"
-            "and v28.16b, v28.16b, v29.16b\n"
-            "add x25, x25, #0x88\n"
-            "add x24, x24, #0x48\n"
-            "fcvtl v21.4s, v21.4h\n"
-            "fcvtl v12.4s, v12.4h\n"
-            ".inst 0x4f82e224  // sdot v4.4s, v17.16b, v2.4b[0]\n"
-            ".inst 0x4fa2e221  // sdot v1.4s, v17.16b, v2.4b[1]\n"
-            ".inst 0x4f82ea20  // sdot v0.4s, v17.16b, v2.4b[2]\n"
-            ".inst 0x4fa2ea3e  // sdot v30.4s, v17.16b, v2.4b[3]\n"
-            "fmul v11.4s, v21.4s, v12.s[0]\n"
-            "fmul v23.4s, v21.4s, v12.s[1]\n"
-            "fmul v17.4s, v21.4s, v12.s[2]\n"
-            ".inst 0x4f9fe2c4  // sdot v4.4s, v22.16b, v31.4b[0]\n"
-            "fmul v6.4s, v21.4s, v12.s[3]\n"
-            ".inst 0x4fbfe2c1  // sdot v1.4s, v22.16b, v31.4b[1]\n"
-            ".inst 0x4f9feac0  // sdot v0.4s, v22.16b, v31.4b[2]\n"
-            ".inst 0x4fbfeade  // sdot v30.4s, v22.16b, v31.4b[3]\n"
-            ".inst 0x4f9be124  // sdot v4.4s, v9.16b, v27.4b[0]\n"
-            ".inst 0x4fbbe121  // sdot v1.4s, v9.16b, v27.4b[1]\n"
-            ".inst 0x4f9be920  // sdot v0.4s, v9.16b, v27.4b[2]\n"
-            ".inst 0x4fbbe93e  // sdot v30.4s, v9.16b, v27.4b[3]\n"
-            ".inst 0x4f9ae0e4  // sdot v4.4s, v7.16b, v26.4b[0]\n"
-            ".inst 0x4fbae0e1  // sdot v1.4s, v7.16b, v26.4b[1]\n"
-            ".inst 0x4f9ae8e0  // sdot v0.4s, v7.16b, v26.4b[2]\n"
-            ".inst 0x4fbae8fe  // sdot v30.4s, v7.16b, v26.4b[3]\n"
-            ".inst 0x4f99e064  // sdot v4.4s, v3.16b, v25.4b[0]\n"
-            ".inst 0x4fb9e061  // sdot v1.4s, v3.16b, v25.4b[1]\n"
-            ".inst 0x4f99e860  // sdot v0.4s, v3.16b, v25.4b[2]\n"
-            ".inst 0x4fb9e87e  // sdot v30.4s, v3.16b, v25.4b[3]\n"
-            ".inst 0x4f98e1a4  // sdot v4.4s, v13.16b, v24.4b[0]\n"
-            ".inst 0x4fb8e1a1  // sdot v1.4s, v13.16b, v24.4b[1]\n"
-            ".inst 0x4f98e9a0  // sdot v0.4s, v13.16b, v24.4b[2]\n"
-            ".inst 0x4fb8e9be  // sdot v30.4s, v13.16b, v24.4b[3]\n"
-            ".inst 0x4f90e384  // sdot v4.4s, v28.16b, v16.4b[0]\n"
-            ".inst 0x4fb0e381  // sdot v1.4s, v28.16b, v16.4b[1]\n"
-            ".inst 0x4f90eb80  // sdot v0.4s, v28.16b, v16.4b[2]\n"
-            ".inst 0x4fb0eb9e  // sdot v30.4s, v28.16b, v16.4b[3]\n"
-            "scvtf v4.4s, v4.4s, #0x4\n"
-            "scvtf v1.4s, v1.4s, #0x4\n"
-            "scvtf v0.4s, v0.4s, #0x4\n"
-            "fmla v15.4s, v4.4s, v11.4s\n"
-            "scvtf v30.4s, v30.4s, #0x4\n"
-            "fmla v19.4s, v1.4s, v23.4s\n"
-            "fmla v18.4s, v0.4s, v17.4s\n"
-            "fmla v14.4s, v30.4s, v6.4s\n"
-            "bgt 7b\n"
-            "mov x20, %x[res_ptr]\n"
-            "cmp x10, #0x1\n"
-            "str q15, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "ble 8f\n"
-            "cmp x10, #0x2\n"
-            "str q19, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "ble 8f\n"
-            "cmp x10, #0x3\n"
-            "str q18, [x20, #0x0]\n"
-            "add x20, x20, %x[res_stride]\n"
-            "ble 8f\n"
-            "str q14, [x20, #0x0]\n"
-            "8:"  // Row tail: Accumulator store skip
-            "subs x23, x23, #0x4\n"
-            "add %x[res_ptr], %x[res_ptr], #0x10\n"
-            "bne 6b\n"
-            "subs x10, x10, #0x4\n"
-            "add %x[a_ptr], %x[a_ptr], x9\n"
-            "mov %x[res_ptr], x22\n"
-            "bgt 5b\n"
-            "9:"  // Row tail: Row loop skip
-            : [a_ptr] "+&r" (a_ptr), [res_ptr] "+&r" (res_ptr)
-            : [b_ptr] "r" (b_ptr), [nr] "r" (nr), [nb] "r" (nb), [res_stride] "r" (res_stride), [nc] "r" (nc)
-            : "cc", "memory", "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31", "x9", "x10", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28"
-        );
+            for (int x = 0; x < nc / ncols_interleaved; x++) {
+                const block_q4_0x4 * b_ptr = (const block_q4_0x4 *) vx + (x * nb);
+
+                float32x4_t sumf[UNROLL_FACTOR][4];
+                for (int z = 0; z < UNROLL_FACTOR; z ++) {
+                    for (int m = 0; m < 4; m++) {
+                        sumf[z][m] = vdupq_n_f32(0);
+                    }
+                }
+                // (v15, v19, v18, v14) = sumf[0][0, 1, 2, 3]
+                // (v11, v13, v23, v16) = sumf[1][0, 1, 2, 3]
+                // (v27, v7,  v0,  v4 ) = sumf[2][0, 1, 2, 3]
+                // (v5,  v21, v8,  v1 ) = sumf[3][0, 1, 2, 3]
+
+                for (int l = 0; l < nb; l++) {
+                    // x24 : loop control
+
+                    // x28 = b_ptr[l].qs
+                    // (x25, x23, x22, x21) = a_ptr[0, 1, 2, 3][l].qs
+
+                    int8x16_t b_hi[4], b_lo[4];
+                    for (int k = 0; k < 4; k++) {
+                        uint8x16_t b = vld1q_u8(b_ptr[l].qs + 16 * k);
+                        b_hi[k] = vreinterpretq_s8_u8(b & 0xF0);
+                        b_lo[k] = vreinterpretq_s8_u8(b << 4);
+                    }
+                    // (v12, v3)  = (b_lo[0], b_hi[0])
+                    // (v31, v22) = (b_lo[1], b_hi[1])
+                    // (v6, v27)  = (b_lo[2], b_hi[2])
+                    // (v28, v30) = (b_lo[3], b_hi[3])
+
+                    float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *)b_ptr[l].d));
+                    // v17 = b_d
+
+                    // unroll in ASM
+                    for (int z = 0; z < UNROLL_FACTOR; z++) {
+                        int32x4_t sumi[4];
+                        for (int m = 0; m < 4; m++) {
+                            sumi[m] = vdupq_n_s32(0);
+                        }
+                        // (v10, v29, v9, v20) = sumi[0, 1, 2, 3]   (z = 0)
+                        // (v9, v29, v20, v2)  = sumi[0, 1, 2, 3]   (z = 1)
+                        // (v20, v10, v26, v2) = sumi[0, 1, 2, 3]   (z = 2)
+                        // (v26, v10, v2, v19) = sumi[0, 1, 2, 3]   (z = 3)
+
+                        for (int k = 0; k < 4; k++) {
+                            int8x16_t a0 = vld1q_s8(a_ptr[z][l].qs + 16 * k + 0);
+                            sumi[0] = vdotq_laneq_s32(sumi[0], b_lo[k], a0, 0);
+                            sumi[1] = vdotq_laneq_s32(sumi[1], b_lo[k], a0, 1);
+                            sumi[2] = vdotq_laneq_s32(sumi[2], b_lo[k], a0, 2);
+                            sumi[3] = vdotq_laneq_s32(sumi[3], b_lo[k], a0, 3);
+                        }
+                        for (int k = 0; k < 4; k++) {
+                            int8x16_t a1 = vld1q_s8(a_ptr[z][l].qs + 16 * k + 64);
+                            sumi[0] = vdotq_laneq_s32(sumi[0], b_hi[k], a1, 0);
+                            sumi[1] = vdotq_laneq_s32(sumi[1], b_hi[k], a1, 1);
+                            sumi[2] = vdotq_laneq_s32(sumi[2], b_hi[k], a1, 2);
+                            sumi[3] = vdotq_laneq_s32(sumi[3], b_hi[k], a1, 3);
+                        }
+
+                        float32x4_t a_d = vcvt_f32_f16(vld1_f16((const float16_t *)a_ptr[z][l].d));
+                        // (v2, v26, v29, v20) = a_d    (z = 0, 1, 2, 3)
+
+                        sumf[z][0] = vmlaq_f32(sumf[z][0], vmulq_laneq_f32(b_d, a_d, 0), vcvtq_n_f32_s32(sumi[0], 4));
+                        sumf[z][1] = vmlaq_f32(sumf[z][1], vmulq_laneq_f32(b_d, a_d, 1), vcvtq_n_f32_s32(sumi[1], 4));
+                        sumf[z][2] = vmlaq_f32(sumf[z][2], vmulq_laneq_f32(b_d, a_d, 2), vcvtq_n_f32_s32(sumi[2], 4));
+                        sumf[z][3] = vmlaq_f32(sumf[z][3], vmulq_laneq_f32(b_d, a_d, 3), vcvtq_n_f32_s32(sumi[3], 4));
+                    }
+
+                }
+
+                for (int z = 0; z < UNROLL_FACTOR; z++) {
+                    for (int m = 0; m < 4; m++) {
+                        vst1q_f32(s + ((y + z) * 4 + m) * bs + x * 4, sumf[z][m]);
+                    }
+                }
+            }
+        }
+#undef UNROLL_FACTOR
+
+        for (; y < nr / 4; y++) {
+            // x10 : loop control
+
+            const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
+            for (int x = 0; x < nc / ncols_interleaved; x++) {
+                const block_q4_0x4 * b_ptr = (const block_q4_0x4 *) vx + (x * nb);
+
+                float32x4_t sumf[4];
+                for (int m = 0; m < 4; m++) {
+                    sumf[m] = vdupq_n_f32(0);
+                }
+                // (v15, v19, v18, v14) = sumf[0, 1, 2, 3]
+
+                for (int l = 0; l < nb; l++) {
+                    // x21 : loop control
+
+                    // x25 = a_ptr[l].qs
+                    // x24 = b_ptr[l].qs
+
+                    int8x16_t a_0[4], a_1[4];
+                    a_0[0] = vld1q_s8(a_ptr[l].qs + 0);
+                    a_0[1] = vld1q_s8(a_ptr[l].qs + 16);
+                    a_0[2] = vld1q_s8(a_ptr[l].qs + 32);
+                    a_0[3] = vld1q_s8(a_ptr[l].qs + 48);
+                    a_1[0] = vld1q_s8(a_ptr[l].qs + 64);
+                    a_1[1] = vld1q_s8(a_ptr[l].qs + 80);
+                    a_1[2] = vld1q_s8(a_ptr[l].qs + 96);
+                    a_1[3] = vld1q_s8(a_ptr[l].qs + 112);
+                    // (v5, v26) = (a_0[0], a_1[0])
+                    // (v2, v25) = (a_0[0], a_1[0])
+                    // (v31, v24) = (a_0[0], a_1[0])
+                    // (v27, v16) = (a_0[0], a_1[0])
+
+                    uint8x16_t b_0 = vld1q_u8(b_ptr[l].qs + 0);
+                    uint8x16_t b_1 = vld1q_u8(b_ptr[l].qs + 16);
+                    uint8x16_t b_2 = vld1q_u8(b_ptr[l].qs + 32);
+                    uint8x16_t b_3 = vld1q_u8(b_ptr[l].qs + 48);
+                    // (v7, v3, v13, v28) = (b_0, b_1, b_2, b_3)
+
+                    int8x16_t b_lo[4], b_hi[4];
+                    b_hi[0] = vreinterpretq_s8_u8(b_0 & 0xF0);
+                    b_lo[0] = vreinterpretq_s8_u8(b_0 << 4);
+                    b_hi[1] = vreinterpretq_s8_u8(b_1 & 0xF0);
+                    b_lo[1] = vreinterpretq_s8_u8(b_1 << 4);
+                    b_hi[2] = vreinterpretq_s8_u8(b_2 & 0xF0);
+                    b_lo[2] = vreinterpretq_s8_u8(b_2 << 4);
+                    b_hi[3] = vreinterpretq_s8_u8(b_3 & 0xF0);
+                    b_lo[3] = vreinterpretq_s8_u8(b_3 << 4);
+                    // (v20, v7) = (b_lo[0], b_hi[0])
+                    // (v17, v3) = (b_lo[1], b_hi[1])
+                    // (v22, v13) = (b_lo[2], b_hi[2])
+                    // (v9, v28) = (b_lo[3], b_hi[3])
+
+                    float32x4_t a_d = vcvt_f32_f16(vld1_f16((const float16_t *)a_ptr[l].d));
+                    // v12 = a_d
+                    float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *)b_ptr[l].d));
+                    // v21 = b_d
+
+                    int32x4_t sumi_0 = vdupq_n_s32(0);
+                    int32x4_t sumi_1 = vdupq_n_s32(0);
+                    int32x4_t sumi_2 = vdupq_n_s32(0);
+                    int32x4_t sumi_3 = vdupq_n_s32(0);
+                    // (v4, v1, v0, v30) = (sumi_0, sumi_1, sumi_2, sumi_3)
+
+                    for (int k = 0; k < 4; k++) {
+                        sumi_0 = vdotq_laneq_s32(sumi_0, b_lo[k], a_0[k], 0);
+                        sumi_1 = vdotq_laneq_s32(sumi_1, b_lo[k], a_0[k], 1);
+                        sumi_2 = vdotq_laneq_s32(sumi_2, b_lo[k], a_0[k], 2);
+                        sumi_3 = vdotq_laneq_s32(sumi_3, b_lo[k], a_0[k], 3);
+                        sumi_0 = vdotq_laneq_s32(sumi_0, b_hi[k], a_1[k], 0);
+                        sumi_1 = vdotq_laneq_s32(sumi_1, b_hi[k], a_1[k], 1);
+                        sumi_2 = vdotq_laneq_s32(sumi_2, b_hi[k], a_1[k], 2);
+                        sumi_3 = vdotq_laneq_s32(sumi_3, b_hi[k], a_1[k], 3);
+                    }
+
+                    sumf[0] = vmlaq_f32(sumf[0], vmulq_laneq_f32(b_d, a_d, 0), vcvtq_n_f32_s32(sumi_0, 4));
+                    sumf[1] = vmlaq_f32(sumf[1], vmulq_laneq_f32(b_d, a_d, 1), vcvtq_n_f32_s32(sumi_1, 4));
+                    sumf[2] = vmlaq_f32(sumf[2], vmulq_laneq_f32(b_d, a_d, 2), vcvtq_n_f32_s32(sumi_2, 4));
+                    sumf[3] = vmlaq_f32(sumf[3], vmulq_laneq_f32(b_d, a_d, 3), vcvtq_n_f32_s32(sumi_3, 4));
+                }
+
+                // NOTE: asm version has addition code to handle `nr` is not multiple of 4
+                for (int m = 0; m < 4; m++) {
+                    vst1q_f32(s + (y * 4 + m) * bs + x * 4, sumf[m]);
+                }
+            }
+        }
         return;
     }
 #endif // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
@@ -3472,6 +3344,117 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * 
             for (int m = 0; m < 4; m++) {
                 for (int j = 0; j < ncols_interleaved; j++)
                     s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j];
+            }
+        }
+    }
+}
+
+void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+    const int qk = QK8_0;
+    const int nb = n / qk;
+    const int ncols_interleaved = 4;
+    const int blocklen = 4;
+
+    assert (n % qk == 0);
+    assert (nr % 4 == 0);
+    assert (nc % ncols_interleaved == 0);
+
+    UNUSED(s);
+    UNUSED(bs);
+    UNUSED(vx);
+    UNUSED(vy);
+    UNUSED(nr);
+    UNUSED(nc);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+#if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
+    if (ggml_cpu_has_neon()) {
+        const int8x16_t kvalues = vld1q_s8(kvalues_iq4nl);
+
+        for (int y = 0; y < nr / 4; y++) {
+            const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
+            for (int x = 0; x < nc / ncols_interleaved; x++) {
+                const block_q4_0x4 * b_ptr = (const block_q4_0x4 *) vx + (x * nb);
+
+                float32x4_t sumf[4];
+                for (int m = 0; m < 4; m++) {
+                    sumf[m] = vdupq_n_f32(0);
+                }
+
+                for (int l = 0; l < nb; l++) {
+                    float32x4_t a_d = vcvt_f32_f16(vld1_f16((const float16_t *)a_ptr[l].d));
+                    float32x4_t b_d = vcvt_f32_f16(vld1_f16((const float16_t *)b_ptr[l].d));
+
+                    int32x4_t sumi_0 = vdupq_n_s32(0);
+                    int32x4_t sumi_1 = vdupq_n_s32(0);
+                    int32x4_t sumi_2 = vdupq_n_s32(0);
+                    int32x4_t sumi_3 = vdupq_n_s32(0);
+
+                    for (int k = 0; k < 4; k++) {
+                        int8x16_t a_0 = vld1q_s8(a_ptr[l].qs + 16 * k + 0);
+                        int8x16_t a_1 = vld1q_s8(a_ptr[l].qs + 16 * k + 64);
+
+                        uint8x16_t b = vld1q_u8(b_ptr[l].qs + 16 * k);
+                        int8x16_t b_hi = vqtbl1q_s8(kvalues, b >> 4);
+                        int8x16_t b_lo = vqtbl1q_s8(kvalues, b & 0xF);
+
+                        sumi_0 = vdotq_laneq_s32(sumi_0, b_lo, a_0, 0);
+                        sumi_1 = vdotq_laneq_s32(sumi_1, b_lo, a_0, 1);
+                        sumi_2 = vdotq_laneq_s32(sumi_2, b_lo, a_0, 2);
+                        sumi_3 = vdotq_laneq_s32(sumi_3, b_lo, a_0, 3);
+                        sumi_0 = vdotq_laneq_s32(sumi_0, b_hi, a_1, 0);
+                        sumi_1 = vdotq_laneq_s32(sumi_1, b_hi, a_1, 1);
+                        sumi_2 = vdotq_laneq_s32(sumi_2, b_hi, a_1, 2);
+                        sumi_3 = vdotq_laneq_s32(sumi_3, b_hi, a_1, 3);
+                    }
+
+                    sumf[0] = vmlaq_f32(sumf[0], vmulq_laneq_f32(b_d, a_d, 0), vcvtq_f32_s32(sumi_0));
+                    sumf[1] = vmlaq_f32(sumf[1], vmulq_laneq_f32(b_d, a_d, 1), vcvtq_f32_s32(sumi_1));
+                    sumf[2] = vmlaq_f32(sumf[2], vmulq_laneq_f32(b_d, a_d, 2), vcvtq_f32_s32(sumi_2));
+                    sumf[3] = vmlaq_f32(sumf[3], vmulq_laneq_f32(b_d, a_d, 3), vcvtq_f32_s32(sumi_3));
+                }
+
+                for (int m = 0; m < 4; m++) {
+                    vst1q_f32(s + (y * 4 + m) * bs + x * 4, sumf[m]);
+                }
+            }
+        }
+        return;
+    }
+#endif // #if ! ((defined(_MSC_VER)) && ! defined(__clang__)) && defined(__aarch64__) && defined(__ARM_NEON)
+    {
+        float sumf[4][4];
+        int sumi;
+
+        for (int y = 0; y < nr / 4; y++) {
+            const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
+            for (int x = 0; x < nc / ncols_interleaved; x++) {
+                const block_iq4_nlx4 * b_ptr = (const block_iq4_nlx4 *) vx + (x * nb);
+                for (int m = 0; m < 4; m++) {
+                    for (int j = 0; j < ncols_interleaved; j++) sumf[m][j] = 0.0;
+                }
+                for (int l = 0; l < nb; l++) {
+                    for (int k = 0; k < (qk / (2 * blocklen)); k++) {
+                        for (int m = 0; m < 4; m++) {
+                            for (int j = 0; j < ncols_interleaved; j++) {
+                                sumi = 0;
+                                for (int i = 0; i < blocklen; ++i) {
+                                    const int v0 = kvalues_iq4nl[b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0x0F];
+                                    const int v1 = kvalues_iq4nl[b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4];
+                                    sumi += ((v0 * a_ptr[l].qs[k * 4 * blocklen + m * blocklen + i]) +
+                                            (v1 * a_ptr[l].qs[k * 4 * blocklen + m * blocklen + i + qk / 2 * 4]));
+                                }
+                                sumf[m][j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_FP16_TO_FP32(a_ptr[l].d[m]);
+                            }
+                        }
+                    }
+                }
+                for (int m = 0; m < 4; m++) {
+                    for (int j = 0; j < ncols_interleaved; j++)
+                        s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j];
+                }
             }
         }
     }
