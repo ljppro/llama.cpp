@@ -1036,10 +1036,14 @@ public:
 };
 
 std::string json_schema_to_grammar(const json & schema) {
+#ifdef GGML_LLGUIDANCE
+    return "llg:json:" + schema.dump();
+#else
     SchemaConverter converter([](const std::string &) { return json::object(); }, /* dotall= */ false);
     auto copy = schema;
     converter.resolve_refs(copy, "input");
     converter.visit(copy, "");
     converter.check_errors();
     return converter.format_grammar();
+#endif
 }

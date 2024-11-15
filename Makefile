@@ -359,6 +359,16 @@ ifdef LLAMA_SERVER_SSL
 	MK_LDFLAGS += -lssl -lcrypto
 endif
 
+# git clone https://github.com/microsoft/llguidance 
+# cd llguidance/parser
+# cargo build --release
+# cd ../../llama.cpp
+# make LLGUIDANCE_PATH=../llguidance/parser/target/release -j llama-server
+ifdef LLGUIDANCE_PATH
+	MK_CPPFLAGS  += -DGGML_LLGUIDANCE -I$(LLGUIDANCE_PATH)
+	MK_LDFLAGS   += $(LLGUIDANCE_PATH)/libllguidance_parser.a
+endif
+
 # warnings
 WARN_FLAGS = \
 	-Wall \

@@ -1125,6 +1125,13 @@ extern "C" {
                           const char * grammar_str,
                           const char * grammar_root);
 
+#ifdef GGML_LLGUIDANCE
+    LLAMA_API struct llama_sampler * llama_sampler_init_llg(
+            const struct llama_model * model,
+                          const char * grammar_type,
+                          const char * grammar_data);
+#endif
+
     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
                              int32_t   n_vocab,         // llama_n_vocab()
                          llama_token   special_eos_id,  // llama_token_eos()
