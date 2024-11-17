@@ -8,6 +8,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
+#include "ggml-opt.h"
 
 // TODO: replace with ggml API call
 #define QK_K 256
@@ -3325,21 +3326,24 @@ struct llama_context {
     void *              abort_callback_data = nullptr;
 
     // input tensors
-    struct ggml_tensor * inp_tokens;      // I32 [n_batch]
-    struct ggml_tensor * inp_embd;        // F32 [n_embd, n_batch]
-    struct ggml_tensor * inp_pos;         // I32 [n_batch]
-    struct ggml_tensor * inp_out_ids;     // I32 [n_outputs]
-    struct ggml_tensor * inp_KQ_mask;     // F32 [kv_size, n_batch]
-    struct ggml_tensor * inp_KQ_mask_swa; // F32 [kv_size, n_batch]
-    struct ggml_tensor * inp_K_shift;     // I32 [kv_size]
-    struct ggml_tensor * inp_mean;        // F32 [n_batch, n_batch]
-    struct ggml_tensor * inp_cls;         // I32 [n_batch]
-    struct ggml_tensor * inp_s_copy;      // I32 [kv_size]
-    struct ggml_tensor * inp_s_mask;      // F32 [1, n_kv]
-    struct ggml_tensor * inp_s_seq;       // I32 [n_kv, n_batch]
+    struct ggml_tensor * inp_tokens;        // I32 [n_batch]
+    struct ggml_tensor * inp_embd;          // F32 [n_embd, n_batch]
+    struct ggml_tensor * inp_pos;           // I32 [n_batch]
+    struct ggml_tensor * inp_out_ids;       // I32 [n_outputs]
+    struct ggml_tensor * inp_KQ_mask;       // F32 [kv_size, n_batch]
+    struct ggml_tensor * inp_KQ_mask_swa;   // F32 [kv_size, n_batch]
+    struct ggml_tensor * inp_K_shift;       // I32 [kv_size]
+    struct ggml_tensor * inp_mean;          // F32 [n_batch, n_batch]
+    struct ggml_tensor * inp_cls;           // I32 [n_batch]
+    struct ggml_tensor * inp_s_copy;        // I32 [kv_size]
+    struct ggml_tensor * inp_s_mask;        // F32 [1, n_kv]
+    struct ggml_tensor * inp_s_seq;         // I32 [n_kv, n_batch]
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
+
+    // training
+    ggml_opt_context_t opt_ctx = nullptr;
 };
 
 struct llama_lora_weight {
@@ -4823,6 +4827,7 @@ struct llama_model_loader {
             n_created++;
         }
 
+        ggml_set_param(nullptr, tensor);
         return tensor;
 
     }
@@ -9391,7 +9396,7 @@ static struct ggml_tensor * llm_build_inp_embd(
 
         inpL = ggml_get_rows(ctx, tok_embd, lctx.inp_tokens);
     } else {
-       lctx.inp_embd = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
+        lctx.inp_embd = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, batch.n_tokens);
         inpL = lctx.inp_embd;
         ggml_set_input(lctx.inp_embd);
     }
@@ -10358,18 +10363,18 @@ struct llm_build_context {
 
         ctx0 = ggml_init(params);
 
-        lctx.inp_tokens      = nullptr;
-        lctx.inp_embd        = nullptr;
-        lctx.inp_pos         = nullptr;
-        lctx.inp_out_ids     = nullptr;
-        lctx.inp_KQ_mask     = nullptr;
-        lctx.inp_KQ_mask_swa = nullptr;
-        lctx.inp_K_shift     = nullptr;
-        lctx.inp_mean        = nullptr;
-        lctx.inp_cls         = nullptr;
-        lctx.inp_s_copy      = nullptr;
-        lctx.inp_s_mask      = nullptr;
-        lctx.inp_s_seq       = nullptr;
+        lctx.inp_tokens        = nullptr;
+        lctx.inp_embd          = nullptr;
+        lctx.inp_pos           = nullptr;
+        lctx.inp_out_ids       = nullptr;
+        lctx.inp_KQ_mask       = nullptr;
+        lctx.inp_KQ_mask_swa   = nullptr;
+        lctx.inp_K_shift       = nullptr;
+        lctx.inp_mean          = nullptr;
+        lctx.inp_cls           = nullptr;
+        lctx.inp_s_copy        = nullptr;
+        lctx.inp_s_mask        = nullptr;
+        lctx.inp_s_seq         = nullptr;
         lctx.inp_pos_bucket    = nullptr;
         lctx.inp_embd_enc      = nullptr;
         lctx.inp_KQ_mask_cross = nullptr;
@@ -17470,8 +17475,10 @@ static enum ggml_status llama_graph_compute(
 // the kv_cache state will be returned to its original state
 // (for non-recurrent models) or cleaned (for recurrent models)
 //
-//   - lctx:      llama context
-//   - batch:     batch to evaluate
+//   - lctx:         llama context
+//   - inp_batch:    batch to evaluate
+//   - ubatch_build: If not null, write the first constructed llama_ubatch to this pointer and return.
+//                   Used to hijack the forward path construction code for training.
 //
 // return 0 on success
 // return positive int on warning
@@ -17479,7 +17486,9 @@ static enum ggml_status llama_graph_compute(
 //
 static int llama_decode_internal(
          llama_context & lctx,
-           llama_batch   inp_batch) {
+           llama_batch   inp_batch,
+          llama_ubatch * ubatch_build,
+              uint32_t   iub) {
 
     lctx.is_encoding = false;
 
@@ -17594,7 +17603,7 @@ static int llama_decode_internal(
         GGML_ASSERT(n_threads > 0);
 
         // non-causal masks do not use the KV cache
-        if (hparams.causal_attn) {
+        if (hparams.causal_attn && (!ubatch_build || iub == 0)) {
             llama_kv_cache_update(&lctx);
 
             // if we have enough unused cells before the current head ->
@@ -17623,6 +17632,15 @@ static int llama_decode_internal(
 
         ggml_backend_sched_reset(lctx.sched.get());
         ggml_backend_sched_set_eval_callback(lctx.sched.get(), lctx.cparams.cb_eval, lctx.cparams.cb_eval_user_data);
+
+        if (ubatch_build) {
+            if (iub > 0) {
+                iub--;
+                continue;
+            }
+            *ubatch_build = ubatch;
+            return 0;
+        }
 
         ggml_cgraph * gf = llama_build_graph(lctx, ubatch, false);
 
@@ -19987,6 +20005,7 @@ struct llama_context * llama_new_context_with_model(
 }
 
 void llama_free(struct llama_context * ctx) {
+    ggml_opt_free(ctx->opt_ctx);
     delete ctx;
 }
 
@@ -21554,7 +21573,7 @@ int32_t llama_encode(
 int32_t llama_decode(
         struct llama_context * ctx,
           struct llama_batch   batch) {
-    const int ret = llama_decode_internal(*ctx, batch);
+    const int ret = llama_decode_internal(*ctx, batch, nullptr, 0);
     if (ret != 0) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
     }
@@ -22312,4 +22331,172 @@ void llama_log_callback_default(ggml_log_level level, const char * text, void * 
     (void) user_data;
     fputs(text, stderr);
     fflush(stderr);
+}
+
+//
+// training
+//
+
+ggml_opt_dataset_t llama_opt_dataset_init(struct llama_context * ctx, const llama_token * tokens, int64_t n_tokens, int32_t stride) {
+    const struct llama_model & model = ctx->model;
+    const int32_t ne_datapoint = llama_n_ctx(ctx);
+    const int64_t ndata        = (n_tokens - ne_datapoint - 1) / stride;
+    ggml_opt_dataset_t result = ggml_opt_dataset_init(
+        GGML_TYPE_I32, GGML_TYPE_I32, ne_datapoint, ne_datapoint, ndata, /*ndata_shard =*/ 1);
+
+    llama_token * data   = (llama_token *) ggml_opt_dataset_data(result)->data;
+    llama_token * labels = (llama_token *) ggml_opt_dataset_labels(result)->data;
+
+    for (int64_t idata = 0; idata < ndata; ++idata) {
+        memcpy(data   + idata*ne_datapoint, tokens + idata*stride + 0, ne_datapoint*sizeof(llama_token));
+        memcpy(labels + idata*ne_datapoint, tokens + idata*stride + 1, ne_datapoint*sizeof(llama_token));
+    }
+
+    return result;
+}
+
+struct ggml_opt_optimizer_params llama_get_default_optimizer_params(void * userdata) {
+    struct ggml_opt_optimizer_params result = ggml_opt_get_default_optimizer_params(userdata);
+    result.adamw.alpha = 1e-6f;
+    return result;
+}
+
+void llama_opt_init(struct llama_context * lctx) {
+    GGML_ASSERT(!lctx->opt_ctx);
+    const uint32_t n_ctx    = llama_n_ctx(lctx);
+    const uint32_t n_batch  = std::min(llama_n_batch(lctx),  n_ctx);
+    const uint32_t n_ubatch = std::min(llama_n_ubatch(lctx), n_batch);
+    GGML_ASSERT(n_batch % n_ubatch == 0);
+
+    ggml_opt_params opt_params = ggml_opt_default_params(lctx->sched.get(), nullptr, nullptr, nullptr, GGML_OPT_LOSS_TYPE_CROSS_ENTROPY);
+    opt_params.opt_period = n_batch / n_ubatch;
+    opt_params.get_opt_pars = llama_get_default_optimizer_params;
+    lctx->opt_ctx = ggml_opt_init(opt_params);
+}
+
+void llama_opt_epoch_iter(
+        struct llama_context           * lctx,
+        ggml_opt_dataset_t               dataset,
+        ggml_opt_result_t                result,
+        const std::vector<llama_token> & tokens,
+        const std::vector<llama_token> & labels_sparse,
+        llama_batch                    & batch,
+        ggml_opt_epoch_callback          callback,
+        const bool                       train,
+        const int64_t                    idata_in_loop,
+        const int64_t                    ndata_in_loop,
+        const int64_t                    t_loop_start) {
+    GGML_ASSERT(lctx->opt_ctx);
+    const uint32_t n_ctx    = llama_n_ctx(lctx);
+    const uint32_t n_batch  = std::min(lctx->cparams.n_batch,  n_ctx);
+    const uint32_t n_ubatch = std::min(lctx->cparams.n_ubatch, n_batch);
+
+    llama_kv_cache_clear(lctx);
+
+    for (uint32_t pos_ctx = 0; pos_ctx < n_ctx; pos_ctx += n_batch) {
+        batch.n_tokens = n_batch;
+        for (uint32_t pos_batch = 0; pos_batch < batch.n_tokens; ++pos_batch) {
+            batch.token   [pos_batch]    = tokens[pos_ctx + pos_batch];
+            batch.pos     [pos_batch]    = pos_ctx + pos_batch;
+            batch.n_seq_id[pos_batch]    = 1;
+            batch.seq_id  [pos_batch][0] = 0;
+            batch.logits  [pos_batch]    = true;
+        }
+
+        for (uint32_t pos_batch = 0; pos_batch < n_batch; pos_batch += n_ubatch) {
+            struct llama_ubatch ubatch;
+            {
+                const int ret = llama_decode_internal(*lctx, batch, &ubatch, pos_batch/n_ubatch);
+                GGML_ASSERT(ret == 0);
+            }
+
+            struct ggml_cgraph * gf = llama_build_graph(*lctx, ubatch, false);
+            struct ggml_context * ctx_compute;
+            {
+                const size_t size_gf = ggml_graph_size(gf);
+                const size_t size_meta = 4*size_gf*ggml_tensor_overhead() + 2*ggml_graph_overhead_custom(size_gf, /*grads = */ true);
+                struct ggml_init_params params = {
+                    /*.mem_size   =*/ size_meta,
+                    /*.mem_buffer =*/ nullptr,
+                    /*.no_alloc   =*/ true,
+                };
+                ctx_compute = ggml_init(params);
+            }
+            ggml_opt_set_forward_graph(lctx->opt_ctx, ctx_compute, gf, lctx->inp_tokens, ggml_graph_node(gf, -1), train);
+            llama_set_inputs(*lctx, ubatch);
+            {
+                struct ggml_tensor * labels = ggml_opt_labels(lctx->opt_ctx);
+                GGML_ASSERT(labels->ne[1] == n_ubatch);
+                ggml_set_zero(labels);
+                const float onef = 1.0f;
+                for (uint32_t pos_ubatch = 0; pos_ubatch < n_ubatch; ++pos_ubatch) {
+                    const uint32_t ilabel = pos_ctx + pos_batch + pos_ubatch;
+                    GGML_ASSERT(labels_sparse[ilabel] < labels->ne[0]);
+                    ggml_backend_tensor_set(labels, &onef, (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
+                }
+            }
+            if (train) {
+                ggml_opt_forward_backward(lctx->opt_ctx, result);
+            } else {
+                ggml_opt_forward(lctx->opt_ctx, result);
+            }
+            if (callback) {
+                callback(train, lctx->opt_ctx, dataset, result, idata_in_loop + (pos_ctx + pos_batch)/n_ubatch + 1, ndata_in_loop, t_loop_start);
+            }
+            ggml_free(ctx_compute);
+        }
+    }
+}
+
+void llama_opt_epoch(
+        struct llama_context    * lctx,
+        ggml_opt_dataset_t        dataset,
+        ggml_opt_result_t         result_train,
+        ggml_opt_result_t         result_eval,
+        int64_t                   idata_split,
+        ggml_opt_epoch_callback   callback_train,
+        ggml_opt_epoch_callback   callback_eval) {
+    const uint32_t n_ctx    = llama_n_ctx(lctx);
+    const uint32_t n_vocab  = llama_n_vocab(&lctx->model);
+    const uint32_t n_batch  = std::min(lctx->cparams.n_batch,  n_ctx);
+    const uint32_t n_ubatch = std::min(lctx->cparams.n_ubatch, n_batch);
+    const  int64_t ndata    = ggml_opt_dataset_ndata(dataset);
+
+    GGML_ASSERT(idata_split >= 0);
+    GGML_ASSERT(idata_split <= ndata);
+
+    GGML_ASSERT(n_ctx   % n_batch  == 0);
+    GGML_ASSERT(n_batch % n_ubatch == 0);
+    const uint32_t opt_period     = n_batch / n_ubatch;
+    const uint32_t ubatch_per_ctx = n_ctx   / n_ubatch;
+
+    struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    std::vector<llama_token>        tokens(n_ctx);
+    std::vector<llama_token> labels_sparse(n_ctx);
+
+    int64_t idata = 0;
+
+    int64_t t_loop_start = ggml_time_us();
+    int64_t ndata_in_loop = idata_split*ubatch_per_ctx;
+    for (; idata < idata_split; ++idata) {
+        constexpr bool train = true;
+        const int64_t idata_in_loop = idata*ubatch_per_ctx;
+
+        ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
+        llama_opt_epoch_iter(lctx, dataset, result_train, tokens, labels_sparse, batch,
+            callback_train, train, idata_in_loop, ndata_in_loop, t_loop_start);
+    }
+
+    t_loop_start = ggml_time_us();
+    ndata_in_loop = (ndata - idata_split)*ubatch_per_ctx;
+    for (; idata < ndata; ++idata) {
+        constexpr bool train = false;
+        const int64_t idata_in_loop = (idata - idata_split)*ubatch_per_ctx;
+
+        ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
+        llama_opt_epoch_iter(lctx, dataset, result_eval, tokens, labels_sparse, batch,
+            callback_eval, train, idata_in_loop, ndata_in_loop, t_loop_start);
+    }
+
+    llama_batch_free(batch);
 }

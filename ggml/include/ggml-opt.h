@@ -37,13 +37,16 @@ extern "C" {
     // ====== Dataset ======
 
     GGML_API ggml_opt_dataset_t ggml_opt_dataset_init(
-            int64_t ne_datapoint, // number of elements per datapoint
-            int64_t ne_label,     // number of elements per label
-            int64_t ndata,        // total number of datapoints/labels
-            int64_t ndata_shard); // number of datapoints/labels per shard (unit at which the dataset is shuffled/copied)
+            enum ggml_type type_data,    // the type for the internal data tensor
+            enum ggml_type type_label,   // the type for the internal labels tensor
+            int64_t        ne_datapoint, // number of elements per datapoint
+            int64_t        ne_label,     // number of elements per label
+            int64_t        ndata,        // total number of datapoints/labels
+            int64_t        ndata_shard); // number of datapoints/labels per shard (unit at which the dataset is shuffled/copied)
     GGML_API void ggml_opt_dataset_free(ggml_opt_dataset_t dataset);
 
     // get underlying tensors that store the data
+    GGML_API int64_t              ggml_opt_dataset_ndata (ggml_opt_dataset_t dataset);
     GGML_API struct ggml_tensor * ggml_opt_dataset_data  (ggml_opt_dataset_t dataset); // shape = [ne_datapoint, ndata]
     GGML_API struct ggml_tensor * ggml_opt_dataset_labels(ggml_opt_dataset_t dataset); // shape = [nd_label,     ndata]
 
@@ -55,6 +58,12 @@ extern "C" {
             ggml_opt_dataset_t   dataset,
             struct ggml_tensor * data_batch,   // shape = [ne_datapoint, ndata_batch]
             struct ggml_tensor * labels_batch, // shape = [ne_label,     ndata_batch]
+            int64_t              ibatch);
+    GGML_API void ggml_opt_dataset_get_batch_host(
+            ggml_opt_dataset_t   dataset,
+            void               * data_batch,
+            size_t               nb_data_batch,
+            void               * labels_batch,
             int64_t              ibatch);
 
     // ====== Model / Context ======
@@ -92,7 +101,8 @@ extern "C" {
         struct ggml_context * ctx_compute; // created in user code, holds non-static tensors
 
         // the forward graph is defined by inputs and outputs
-        // those tensors and all tensors inbetween are not intended to be reusable between multiple optimization contexts
+        // the outputs and all tensors between inputs and outputs that have not been statically allocated
+        //     are not intended to be reusable between multiple optimization contexts
         struct ggml_tensor * inputs;
         struct ggml_tensor * outputs;
 
@@ -107,7 +117,7 @@ extern "C" {
 
     // get parameters for an optimization context with defaults set where possible
     // parameters for which no sensible defaults exist are supplied as arguments to this function
-    GGML_API ggml_opt_params ggml_opt_default_params(
+    GGML_API struct ggml_opt_params ggml_opt_default_params(
             ggml_backend_sched_t      backend_sched,
             struct ggml_context     * ctx_compute,
             struct ggml_tensor      * inputs,
@@ -143,6 +153,10 @@ extern "C" {
     GGML_API void ggml_opt_result_accuracy(ggml_opt_result_t result, double  * accuracy, double * unc); // writes 1 value
 
     // ====== Computation ======
+
+    GGML_API void ggml_opt_set_forward_graph(
+        ggml_opt_context_t opt_ctx, struct ggml_context * ctx_compute, struct ggml_cgraph * gf,
+        struct ggml_tensor * inputs, struct ggml_tensor * outputs, bool backward);
 
     // do forward pass, increment result if not NULL
     GGML_API void ggml_opt_forward(ggml_opt_context_t opt_ctx, ggml_opt_result_t result);
@@ -200,9 +214,9 @@ extern "C" {
     // fit model defined by inputs and outputs to dataset
     GGML_API void ggml_opt_fit(
             ggml_backend_sched_t            backend_sched,  // backend scheduler for constructing the compute graphs
-            ggml_context                  * ctx_compute,    // context with temporarily allocated tensors to calculate the outputs
-            ggml_tensor                   * inputs,         // input tensor with shape [ne_datapoint, ndata_batch]
-            ggml_tensor                   * outputs,        // output tensor, must have shape [ne_label, ndata_batch] if labels are used
+            struct ggml_context           * ctx_compute,    // context with temporarily allocated tensors to calculate the outputs
+            struct ggml_tensor            * inputs,         // input tensor with shape [ne_datapoint, ndata_batch]
+            struct ggml_tensor            * outputs,        // output tensor, must have shape [ne_label, ndata_batch] if labels are used
             ggml_opt_dataset_t              dataset,        // dataset with data and optionally also labels
             enum ggml_opt_loss_type         loss_type,      // loss to minimize
             ggml_opt_get_optimizer_params   get_opt_pars,   // callback to get optimizer params, userdata is pointer to epoch (of type int64_t)

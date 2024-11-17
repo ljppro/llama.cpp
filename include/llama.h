@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
 #include "ggml-backend.h"
+#include "ggml-opt.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -800,7 +801,7 @@ extern "C" {
     // Frees a batch of tokens allocated with llama_batch_init()
     LLAMA_API void llama_batch_free(struct llama_batch batch);
 
-    // Processes a batch of tokens with the ecoder part of the encoder-decoder model.
+    // Processes a batch of tokens with the encoder part of the encoder-decoder model.
     // Stores the encoder output internally for later use by the decoder cross-attention layers.
     //   0 - success
     // < 0 - error. the KV cache state is restored to the state before this call
@@ -808,7 +809,7 @@ extern "C" {
             struct llama_context * ctx,
               struct llama_batch   batch);
 
-    // Positive return values does not mean a fatal error, but rather a warning.
+    // A positive return value does not mean a fatal error, but rather a warning.
     //   0 - success
     //   1 - could not find a KV slot for the batch (try reducing the size of the batch or increase the context)
     // < 0 - error. the KV cache state is restored to the state before this call
@@ -1249,6 +1250,23 @@ extern "C" {
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
+
+    //
+    // training
+    //
+
+    LLAMA_API ggml_opt_dataset_t llama_opt_dataset_init(struct llama_context * ctx, const llama_token * tokens, int64_t n_tokens, int32_t stride);
+
+    LLAMA_API void llama_opt_init(struct llama_context * lctx);
+
+    LLAMA_API void llama_opt_epoch(
+            struct llama_context    * lctx,
+            ggml_opt_dataset_t        dataset,
+            ggml_opt_result_t         result_train,
+            ggml_opt_result_t         result_eval,
+            int64_t                   idata_split,
+            ggml_opt_epoch_callback   callback_train,
+            ggml_opt_epoch_callback   callback_eval);
 
 #ifdef __cplusplus
 }
