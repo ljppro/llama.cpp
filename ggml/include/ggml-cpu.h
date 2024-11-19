@@ -128,24 +128,15 @@ extern "C" {
 
     // Internal types and functions exposed for tests and benchmarks
 
-    typedef void (*ggml_from_float_to_mat_t)
-                                     (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t nr, int64_t k, int64_t bs);
     typedef void (*ggml_vec_dot_t)  (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,
                                        const void * GGML_RESTRICT y, size_t by, int nrc);
-    typedef void (*ggml_gemv_t)     (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x,
-                                       const void * GGML_RESTRICT y, int nr, int nc);
-    typedef void (*ggml_gemm_t)     (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x,
-                                       const void * GGML_RESTRICT y, int nr, int nc);
 
     struct ggml_type_traits_cpu {
         ggml_from_float_t        from_float;
-        ggml_from_float_to_mat_t from_float_to_mat;
         ggml_vec_dot_t           vec_dot;
         enum ggml_type           vec_dot_type;
         int64_t                  nrows; // number of rows to process simultaneously
         int64_t                  ncols; // number of columns to process simultaneously
-        ggml_gemv_t              gemv;
-        ggml_gemm_t              gemm;
     };
 
     GGML_BACKEND_API const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type);

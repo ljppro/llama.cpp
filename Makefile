@@ -938,7 +938,6 @@ DIR_COMMON = common
 
 OBJ_GGML = \
 	$(DIR_GGML)/src/ggml.o \
-	$(DIR_GGML)/src/ggml-aarch64.o \
 	$(DIR_GGML)/src/ggml-alloc.o \
 	$(DIR_GGML)/src/ggml-backend.o \
 	$(DIR_GGML)/src/ggml-backend-reg.o \

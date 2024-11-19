@@ -2,6 +2,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
 #include "ggml-cpu-aarch64.h"
+#include "ggml-cpu-traits.h"
 #include "ggml-impl.h"
 #include <cctype>
 #include <string>
@@ -70,7 +71,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_hbm_buffer_type(void) {
 }
 #endif
 
-// buffer type AARCH64
+// buffer type AARCH64 => move to ggml-cpu-aarch64 ...
 
 static void ggml_backend_cpu_aarch64_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
     tensor->extra = (void *)ggml_aarch64_get_optimal_repack_type(tensor); // NOLINT
@@ -82,9 +83,9 @@ static void ggml_backend_cpu_aarch64_buffer_set_tensor(ggml_backend_buffer_t buf
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
-    enum ggml_type repack_type = (enum ggml_type)(intptr_t)tensor->extra;
+    ggml_cpu_tensor_traits* tensor_traits = (ggml_cpu_tensor_traits*)tensor->extra;
 
-    ggml_aarch64_repack_tensor(tensor, repack_type, data, size);
+    tensor_traits->repack(tensor, tensor_traits->blck_size_interleave, data, size);
 
     GGML_UNUSED(buffer);
 }
@@ -456,8 +457,9 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
 
+    // TODO voir comment reformater ca... type_traits && !type_traits->op_supported() => return false?
     if (src0 && src0->buffer && ggml_backend_cpu_buft_is_aarch64(src0->buffer->buft)) {
-        if (op->op != GGML_OP_MUL_MAT || src0->type != GGML_TYPE_Q4_0 || ggml_aarch64_get_optimal_repack_type(src0) == GGML_TYPE_Q4_0) {
+        if (op->op != GGML_OP_MUL_MAT || ggml_aarch64_get_optimal_repack_type(src0) == nullptr) {
             return false;
         }
     }

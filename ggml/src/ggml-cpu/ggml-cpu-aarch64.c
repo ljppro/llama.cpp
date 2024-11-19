@@ -8,7 +8,8 @@
 #include "ggml-quants.h"
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
-#include "ggml-cpu/ggml-cpu-impl.h"
+#include "ggml-cpu-impl.h"
+#include "ggml-cpu-traits.h"
 
 #include <math.h>
 #include <string.h>
@@ -18,6 +19,30 @@
 #include <stdio.h>  // for GGML_ASSERT
 
 #include "ggml-cpu-aarch64.h"
+
+typedef struct {
+    ggml_half d[4];        // deltas for 4 q4_0 blocks
+    uint8_t qs[QK4_0 * 2]; // nibbles / quants for 4 q4_0 blocks
+} block_q4_0x4;
+static_assert(sizeof(block_q4_0x4) == 4 * sizeof(ggml_half) + QK4_0 * 2, "wrong q4_0x4 block size/padding");
+
+typedef struct {
+    ggml_half d[8];        // deltas for 8 q4_0 blocks
+    uint8_t qs[QK4_0 * 4]; // nibbles / quants for 8 q4_0 blocks
+} block_q4_0x8;
+static_assert(sizeof(block_q4_0x8) == 8 * sizeof(ggml_half) + QK4_0 * 4, "wrong q4_0x8 block size/padding");
+
+typedef struct {
+    ggml_half d[4];        // deltas for 4 q8_0 blocks
+    int8_t qs[QK8_0 * 4];  // quants for 4 q8_0 blocks
+} block_q8_0x4;
+static_assert(sizeof(block_q8_0x4) == 4 * sizeof(ggml_half) + QK8_0 * 4, "wrong q8_0x4 block size/padding");
+
+typedef struct {
+    ggml_half d[8];        // deltas for 8 q8_0 blocks
+    int8_t qs[QK8_0 * 8];  // quants for 8 q8_0 blocks
+} block_q8_0x8;
+static_assert(sizeof(block_q8_0x8) == 8 * sizeof(ggml_half) + QK8_0 * 8, "wrong q8_0x8 block size/padding");
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Woverlength-strings"
@@ -496,7 +521,7 @@ static void quantize_q8_0_4x8(const float * restrict x, void * restrict vy, int6
 #endif
 }
 
-void quantize_mat_q8_0(const float * restrict x, void * restrict vy, int64_t nrow, int64_t n_per_row, int64_t blck_size_interleave) {
+static void quantize_mat_q8_0(const float * restrict x, void * restrict vy, int64_t nrow, int64_t n_per_row, int64_t blck_size_interleave) {
     assert(nrow == 4);
     UNUSED(nrow);
     if (blck_size_interleave == 4) {
@@ -508,7 +533,7 @@ void quantize_mat_q8_0(const float * restrict x, void * restrict vy, int64_t nro
     }
 }
 
-void ggml_gemv_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+static void ggml_gemv_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -613,7 +638,7 @@ void ggml_gemv_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * 
     }
 }
 
-void ggml_gemv_q4_0_4x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+static void ggml_gemv_q4_0_4x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -723,7 +748,7 @@ void ggml_gemv_q4_0_4x8_q8_0(int n, float * restrict s, size_t bs, const void * 
     }
 }
 
-void ggml_gemv_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+static void ggml_gemv_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -996,7 +1021,7 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * 
     }
 }
 
-void ggml_gemm_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+static void ggml_gemm_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -1512,7 +1537,7 @@ void ggml_gemm_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * 
     }
 }
 
-void ggml_gemm_q4_0_4x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+static void ggml_gemm_q4_0_4x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -1966,7 +1991,7 @@ void ggml_gemm_q4_0_4x8_q8_0(int n, float * restrict s, size_t bs, const void * 
     }
 }
 
-void ggml_gemm_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
+static void ggml_gemm_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -3386,7 +3411,6 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * restrict s, size_t bs, const void * 
     }
 }
 
-// FIXME: this code is duplicated from ggml-aarch64.c
 static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave) {
     block_q4_0x4 out;
 
@@ -3518,43 +3542,51 @@ static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor *t, int interleave_block,
     GGML_UNUSED(data_size);
 }
 
-// Prepare for optimized kernels if applicable
-void ggml_aarch64_repack_tensor(struct ggml_tensor * cur, enum ggml_type repack_type, const void * restrict data, size_t data_size) {
-    if (cur->type == repack_type) {
-        memcpy(cur->data, data, data_size);
-        return;
-    }
+// the type traits!
+static const struct ggml_cpu_tensor_traits ggml_aarch64_q4_0_4x4_q8_0 = {
+    .repack                   = repack_q4_0_to_q4_0_4_bl,
+    .blck_size_interleave     = 4,
+    .from_float_to_mat        = quantize_mat_q8_0,
+    .vec_dot_type             = GGML_TYPE_Q8_0,
+    .nrows                    = 1,
+    .ncols                    = 4,
+    .gemv                     = ggml_gemv_q4_0_4x4_q8_0,
+    .gemm                     = ggml_gemm_q4_0_4x4_q8_0,
+};
+static const struct ggml_cpu_tensor_traits ggml_aarch64_q4_0_4x8_q8_0 = {
+    .repack                   = repack_q4_0_to_q4_0_4_bl,
+    .blck_size_interleave     = 8,
+    .from_float_to_mat        = quantize_mat_q8_0,
+    .vec_dot_type             = GGML_TYPE_Q8_0,
+    .nrows                    = 1,
+    .ncols                    = 4,
+    .gemv                     = ggml_gemv_q4_0_4x8_q8_0,
+    .gemm                     = ggml_gemm_q4_0_4x8_q8_0,
+};
+static const struct ggml_cpu_tensor_traits ggml_aarch64_q4_0_8x8_q8_0 = {
+    .repack                   = repack_q4_0_to_q4_0_8_bl,
+    .blck_size_interleave     = 8,
+    .from_float_to_mat        = quantize_mat_q8_0,
+    .vec_dot_type             = GGML_TYPE_Q8_0,
+    .nrows                    = 1,
+    .ncols                    = 8,
+    .gemv                     = ggml_gemv_q4_0_8x8_q8_0,
+    .gemm                     = ggml_gemm_q4_0_8x8_q8_0,
+};
 
-    GGML_ASSERT(cur->type == GGML_TYPE_Q4_0);
-
-    switch (repack_type) {
-        case GGML_TYPE_Q4_0_8_8:
-            repack_q4_0_to_q4_0_8_bl(cur, 8, data, data_size);
-            break;
-        case GGML_TYPE_Q4_0_4_8:
-            repack_q4_0_to_q4_0_4_bl(cur, 8, data, data_size);
-            break;
-        case GGML_TYPE_Q4_0_4_4:
-            repack_q4_0_to_q4_0_4_bl(cur, 4, data, data_size);
-            break;
-        default:
-            GGML_ABORT("Unsupported type");
-    }
-}
-
-enum ggml_type ggml_aarch64_get_optimal_repack_type(const struct ggml_tensor * cur) {
+const struct ggml_cpu_tensor_traits* ggml_aarch64_get_optimal_repack_type(const struct ggml_tensor * cur) {
     if (cur->type == GGML_TYPE_Q4_0) {
         // TODO: enable for AVX2 - currently disabled due to bad gemv performance
-        if (/* ggml_cpu_has_avx2() || */ (ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == QK8_0)) {
-            return GGML_TYPE_Q4_0_8_8;
+        if (ggml_cpu_has_avx2() || (ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == QK8_0)) {
+            return &ggml_aarch64_q4_0_8x8_q8_0;
         }
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
-            return GGML_TYPE_Q4_0_4_8;
+            return &ggml_aarch64_q4_0_4x8_q8_0;
         }
         if (ggml_cpu_has_neon()) {
-            return GGML_TYPE_Q4_0_4_4;
+            return &ggml_aarch64_q4_0_4x4_q8_0;
         }
     }
 
-    return cur->type;
+    return NULL;
 }
