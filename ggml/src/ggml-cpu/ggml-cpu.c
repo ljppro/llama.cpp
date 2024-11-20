@@ -223,10 +223,6 @@ typedef void * thread_ret_t;
 
 typedef pthread_t ggml_thread_t;
 
-#ifdef GGML_USE_CPU_HBM
-#include <hbwmalloc.h>
-#endif
-
 #if defined(__APPLE__)
 #include <unistd.h>
 #include <mach/mach.h>
@@ -7389,10 +7385,12 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 static const struct ggml_cpu_tensor_traits* ggml_cpu_get_tensor_traits(
         const struct ggml_tensor * src0)
 {
+#ifdef GGML_USE_CPU_AARCH64
     if (src0->buffer && ggml_backend_cpu_buft_is_aarch64(src0->buffer->buft)) {
         GGML_ASSERT(src0->extra != NULL);
         return (struct ggml_cpu_tensor_traits*)src0->extra;
     }
+#endif
     return NULL;
 }
 

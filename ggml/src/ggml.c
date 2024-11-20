@@ -9,6 +9,10 @@
 // FIXME: required here for quantization functions
 #include "ggml-quants.h"
 
+#ifdef GGML_USE_CPU_HBM
+#include <hbwmalloc.h>
+#endif
+
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
 #elif !defined(__FreeBSD__) && !defined(__NetBSD__) && !defined(__OpenBSD__)
