@@ -1,8 +1,10 @@
 add_library(ggml-cpu
             ggml-cpu.c
             ggml-cpu.cpp
-            ggml-cpu-aarch64.c
+            ggml-cpu-aarch64.cpp
             ggml-cpu-aarch64.h
+            ggml-cpu-hbm.cpp
+            ggml-cpu-hbm.h
             ggml-cpu-quants.c
             ggml-cpu-quants.h
             )

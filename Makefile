@@ -938,7 +938,6 @@ DIR_COMMON = common
 
 OBJ_GGML = \
 	$(DIR_GGML)/src/ggml.o \
-	$(DIR_GGML)/src/ggml-aarch64.o \
 	$(DIR_GGML)/src/ggml-alloc.o \
 	$(DIR_GGML)/src/ggml-backend.o \
 	$(DIR_GGML)/src/ggml-backend-reg.o \
@@ -948,6 +947,7 @@ OBJ_GGML = \
 	$(DIR_GGML)/src/ggml-cpu/ggml-cpu.o \
 	$(DIR_GGML)/src/ggml-cpu/ggml-cpu-cpp.o \
 	$(DIR_GGML)/src/ggml-cpu/ggml-cpu-aarch64.o \
+	$(DIR_GGML)/src/ggml-cpu/ggml-cpu-hbm.o \
 	$(DIR_GGML)/src/ggml-cpu/ggml-cpu-quants.o \
 	$(OBJ_GGML_EXT)
 
