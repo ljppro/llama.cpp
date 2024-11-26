@@ -1784,6 +1784,7 @@ void kernel_mul_mv_ext_q8_0_f32_impl(
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
     const short chpt = 4;
     const short r0pt = 1;
+    const short r1pt = 4;
 
   //const short nxpsg = (32);
     const short nypsg = (32/nxpsg)*r0pt;
@@ -1792,7 +1793,7 @@ void kernel_mul_mv_ext_q8_0_f32_impl(
     const short ty = tiisg/nxpsg;
 
     const int i01 = tgpig.x*(nypsg*nsg) + nypsg*sgitg + ty*r0pt;
-    const int i11 = tgpig.y;
+    const int i11 = tgpig.y*r1pt;
     const int i1m = tgpig.z;
 
     const int i12 = i1m%args.ne12;
@@ -1801,6 +1802,9 @@ void kernel_mul_mv_ext_q8_0_f32_impl(
     const uint64_t offset0 = i01*args.nb01 + (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
     const uint64_t offset1 = i11*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
 
+    //device const float4 * y4 = (device const float4 *) (src1 + offset1) + chpt*tx;
+    //device const float4 * y4 = (device const float4 *) (src1 + offset1) + tx;
+
     device const block_q8_0 * xq[r0pt];
 
     for (short ir0 = 0; ir0 < r0pt; ++ir0) {
@@ -1808,10 +1812,14 @@ void kernel_mul_mv_ext_q8_0_f32_impl(
         xq[ir0] = (i01 + ir0 < args.ne01) ? (device const block_q8_0 *) (src0 + offset0 + ir0*args.nb01) + (tx)/8 : (device const block_q8_0 *) src0;
     }
 
-    //device const float4 * y4 = (device const float4 *) (src1 + offset1) + chpt*tx;
-    device const float4 * y4 = (device const float4 *) (src1 + offset1) + tx;
+    device const float4 * y4[r1pt];
+    for (int ir1 = 0; ir1  < r1pt; ++ir1) {
+        //y4[ir1] = (device const float4 *) (src1 + offset1 + ir1*args.nb11) + tx;
+        y4[ir1] = (i11 + ir1 < args.ne11) ? (device const float4 *) (src1 + offset1 + ir1*args.nb11) + tx : (device const float4 *) src1;
+    }
 
-    float sumf[r0pt] = { [0 ... r0pt - 1] = 0.0f };
+    //float sumf[r0pt] = { [0 ... r0pt - 1] = 0.0f };
+    float sumf[r1pt][r0pt] = { [ 0 ... r1pt - 1 ] = { [0 ... r0pt - 1] = 0.0f } };
 
     for (int iib = 0; (4*chpt)*(iib*nxpsg + tx) < args.ne00; ++iib) {
         for (short ir0 = 0; ir0 < r0pt; ++ir0) {
@@ -1821,42 +1829,53 @@ void kernel_mul_mv_ext_q8_0_f32_impl(
 
                 dequantize_q8_0x(xq[ir0] + (ch*nxpsg)/8, (tx)%8, lx);
 
-                sumf[ir0] += dot(lx, y4[ch*nxpsg]);
+#pragma unroll(4)
+                for (short ir1 = 0; ir1 < r1pt; ++ir1) {
+                    sumf[ir1][ir0] += dot(lx, y4[ir1][ch*nxpsg]);
+                }
             }
         }
 
-        y4 += ((4*chpt)*nxpsg)/4;
+        for (short ir1 = 0; ir1 < r1pt; ++ir1) {
+            y4[ir1] += ((4*chpt)*nxpsg)/4;
+        }
 
         for (short ir0 = 0; ir0 < r0pt; ++ir0) {
             xq[ir0] += ((4*chpt)*nxpsg)/32;
         }
     }
 
-    for (short ir0 = 0; ir0 < r0pt; ++ir0) {
-        if (nxpsg >= 32) {
-            sumf[ir0] += simd_shuffle_down(sumf[ir0],  16);
-        }
-        if (nxpsg >= 16) {
-            sumf[ir0] += simd_shuffle_down(sumf[ir0],  8);
-        }
-        if (nxpsg >= 8) {
-            sumf[ir0] += simd_shuffle_down(sumf[ir0],  4);
-        }
-        if (nxpsg >= 4) {
-            sumf[ir0] += simd_shuffle_down(sumf[ir0],  2);
-        }
-        if (nxpsg >= 2) {
-            sumf[ir0] += simd_shuffle_down(sumf[ir0],  1);
-        }
+    for (short ir1 = 0; ir1 < r1pt; ++ir1) {
+        for (short ir0 = 0; ir0 < r0pt; ++ir0) {
+            if (nxpsg >= 32) {
+                sumf[ir1][ir0] += simd_shuffle_down(sumf[ir1][ir0],  16);
+            }
+            if (nxpsg >= 16) {
+                sumf[ir1][ir0] += simd_shuffle_down(sumf[ir1][ir0],  8);
+            }
+            if (nxpsg >= 8) {
+                sumf[ir1][ir0] += simd_shuffle_down(sumf[ir1][ir0],  4);
+            }
+            if (nxpsg >= 4) {
+                sumf[ir1][ir0] += simd_shuffle_down(sumf[ir1][ir0],  2);
+            }
+            if (nxpsg >= 2) {
+                sumf[ir1][ir0] += simd_shuffle_down(sumf[ir1][ir0],  1);
+            }
 
-        //sumf[ir0] = simd_sum(sumf[ir0]);
+            //sumf[ir1][ir0] = simd_sum(sumf[ir1][ir0]);
+        }
     }
 
-    device float * dst_f32 = (device float *) dst + (uint64_t)i1m*args.ne0*args.ne1 + (uint64_t)i11*args.ne0;
+    //device float * dst_f32 = (device float *) dst + (uint64_t)i1m*args.ne0*args.ne1 + (uint64_t)i11*args.ne0;
 
     if (tx == 0) {
-        for (short ir0 = 0; ir0 < r0pt && i01 + ir0 < args.ne01; ++ir0) {
-            dst_f32[i01 + ir0] = sumf[ir0];
+        for (short ir1 = 0; ir1 < r1pt && i11 + ir1 < args.ne11; ++ir1) {
+            device float * dst_f32 = (device float *) dst + (uint64_t)i1m*args.ne0*args.ne1 + (uint64_t)(i11 + ir1)*args.ne0;
+
+            for (short ir0 = 0; ir0 < r0pt && i01 + ir0 < args.ne01; ++ir0) {
+                dst_f32[i01 + ir0] = sumf[ir1][ir0];
+            }
         }
     }
 }

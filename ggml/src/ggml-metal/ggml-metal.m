@@ -1955,7 +1955,7 @@ static void ggml_metal_encode_node(
                         }
 #endif
 
-                if (src0t == GGML_TYPE_Q8_0 && (ne00%16 == 0) && (ne11 >= 4 && ne11 < 32)) {
+                if (src0t == GGML_TYPE_Q8_0 && (ne00%16 == 0) && (ne11 >= 2 && ne11 < 32)) {
                 //if (false) {
                     id<MTLComputePipelineState> pipeline = nil;
 
@@ -1963,7 +1963,7 @@ static void ggml_metal_encode_node(
 
                     const int nsg    = 2;
                     const int r0pt   = 1;
-                    const int r1pt   = 1;
+                    const int r1pt   = 4;
                     const int nxpsg  = ne11 > 1 ? 8 : 32;
                     const int nypsg  = 32/nxpsg;
                     const int nr0ptg = nypsg*r0pt*nsg;
