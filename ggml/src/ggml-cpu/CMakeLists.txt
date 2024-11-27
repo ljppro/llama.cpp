@@ -71,6 +71,8 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
 
     message(STATUS "ARM detected")
 
+    include(CheckCXXSourceRuns)
+
     if (MSVC)
         add_compile_definitions(__aarch64__) # MSVC defines _M_ARM64 instead
         add_compile_definitions(__ARM_NEON)
@@ -79,20 +81,26 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
         set(CMAKE_REQUIRED_FLAGS_PREV ${CMAKE_REQUIRED_FLAGS})
         string(JOIN " " CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS} "/arch:armv8.2")
 
-        check_cxx_source_compiles("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_DOTPROD)
+        check_cxx_source_runs("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_DOTPROD)
         if (GGML_COMPILER_SUPPORT_DOTPROD)
             add_compile_definitions(__ARM_FEATURE_DOTPROD)
+
+            message(STATUS "ARM feature DOTPROD enabled")
         endif ()
 
-        check_cxx_source_compiles("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vmlaq_f32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_MATMUL_INT8)
+        check_cxx_source_runs("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vmmlaq_f32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_MATMUL_INT8)
 
         if (GGML_COMPILER_SUPPORT_MATMUL_INT8)
             add_compile_definitions(__ARM_FEATURE_MATMUL_INT8)
+
+            message(STATUS "ARM feature MATMUL_INT8 enabled")
         endif ()
 
-        check_cxx_source_compiles("#include <arm_neon.h>\nint main() { float16_t _a; float16x8_t _s = vdupq_n_f16(_a); return 0; }" GGML_COMPILER_SUPPORT_FP16_VECTOR_ARITHMETIC)
+        check_cxx_source_runs("#include <arm_neon.h>\nint main() { float16_t _a; float16x8_t _s = vdupq_n_f16(_a); return 0; }" GGML_COMPILER_SUPPORT_FP16_VECTOR_ARITHMETIC)
         if (GGML_COMPILER_SUPPORT_FP16_VECTOR_ARITHMETIC)
             add_compile_definitions(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
+
+            message(STATUS "ARM feature FP16_VECTOR_ARITHMETIC enabled")
         endif ()
 
         set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_PREV})
@@ -109,21 +117,27 @@ if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
             if (NOT USER_PROVIDED_MARCH)
                 set(MARCH_FLAGS "-march=armv8.2a")
 
-                check_cxx_source_compiles("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_DOTPROD)
+                check_cxx_source_runs("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vdotq_s32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_DOTPROD)
                 if (GGML_COMPILER_SUPPORT_DOTPROD)
                     set(MARCH_FLAGS "${MARCH_FLAGS}+dotprod")
                     add_compile_definitions(__ARM_FEATURE_DOTPROD)
+
+                    message(STATUS "ARM feature DOTPROD enabled")
                 endif ()
 
                 set(TEST_I8MM_FLAGS "-march=armv8.2a+i8mm")
 
                 set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
-                set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} ${TEST_I8MM_FLAGS}")
-                check_cxx_source_compiles("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_MATMUL_INT8)
+                set(CMAKE_REQUIRED_FLAGS     "${CMAKE_REQUIRED_FLAGS} ${TEST_I8MM_FLAGS}")
+
+                check_cxx_source_runs("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vmmlaq_s32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_MATMUL_INT8)
                 if (GGML_COMPILER_SUPPORT_MATMUL_INT8)
                     set(MARCH_FLAGS "${MARCH_FLAGS}+i8mm")
                     add_compile_definitions(__ARM_FEATURE_MATMUL_INT8)
+
+                    message(STATUS "ARM feature MATMUL_INT8 enabled")
                 endif ()
+
                 set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
 
                 list(APPEND ARCH_FLAGS "${MARCH_FLAGS}")
